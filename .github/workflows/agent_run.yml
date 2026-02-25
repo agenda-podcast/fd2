@@ -7,26 +7,32 @@ on:
         description: "Pipeline id (example: P-20260225-001)"
         required: true
         default: "P-20260225-001"
+        type: string
       work_item:
         description: "Work Item ID (example: WI-001)"
         required: true
         default: "WI-001"
+        type: string
       role:
         description: "Role id (example: pm)"
         required: true
         default: "pm"
+        type: string
       task:
         description: "Task text"
         required: true
         default: "Define next step"
+        type: string
       next_role:
         description: "Next role id (empty means pipeline complete)"
         required: false
         default: "tech_lead"
+        type: string
       next_task:
         description: "Next task for next role"
         required: false
         default: "Define technical approach and WI decomposition"
+        type: string
 
   issues:
     types:
@@ -163,21 +169,8 @@ jobs:
           PID=$(python -c "import json;print(json.load(open('tools/issue_input.json'))['pipeline_id'])")
           WI=$(python -c "import json;print(json.load(open('tools/issue_input.json'))['work_item'])")
           TITLE="$WI next: $NR"
-          BODY=$(python - <<PY
-import json
-j=json.load(open('tools/issue_input.json'))
-out={
-  'pipeline_id': j['pipeline_id'],
-  'work_item': j['work_item'],
-  'role': r'''${NR}''',
-  'task': r'''${NT}''',
-  'next_role': '',
-  'next_task': '',
-  'actions': []
-}
-print(json.dumps(out, indent=2))
-PY
-)
+          python tools/build_next_issue_body.py --issue-input tools/issue_input.json --role "$NR" --task "$NT" --out tools/next_issue_body.json
+          BODY=$(cat tools/next_issue_body.json)
           gh issue create --title "$TITLE" --body "$BODY" --label "agent-run"
 
       - name: Open PR when pipeline complete (issues only)

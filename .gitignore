@@ -3,3 +3,4 @@ evidence/**/ARTIFACTS.zip
 evidence/**/OPENAI_RAW.json
 *.zip
 tools/next_step.json
+tools/next_issue_body.json
