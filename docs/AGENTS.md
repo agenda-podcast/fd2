@@ -56,3 +56,5 @@ If you create an Issue and nothing happens:
   pipeline_id, work_item, role, task
 - Check the Actions tab for a run named: fd-agent-run
 - If a run exists but failed, open logs and fix the reported error.
+
+- Issue parsing reads $GITHUB_EVENT_PATH via tools/parse_github_event.py to avoid shell quoting issues.
