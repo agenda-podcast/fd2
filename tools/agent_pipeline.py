@@ -23,7 +23,7 @@ import time
 import zipfile
 from typing import Any, Dict, List
 
-from tools.actions import run_actions, ensure_ascii
+from actions import run_actions, ensure_ascii
 
 
 ROLE_DIR = "agents/roles"
