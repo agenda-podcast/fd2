@@ -1,45 +1,43 @@
-# E2E Verification (FD)
+# E2E Verification
 
 Canonical: docs/E2E_VERIFICATION.md
 
-## Environments and entry criteria
-Local:
-- Entry: clean repo clone
-- Tools: browser + python3
-- Notes: no build required for docs UI
+## Environments
 
-Dev/Staging/Prod:
-- Define when created.
+- main: governance and orchestration checks
+- pipeline: runnable application snapshot
 
-## Deterministic test data
-- Not applicable for docs-only baseline.
+## Scenario Index
 
-## Scenarios
+E2E-001: Pipeline app boots and serves content
+Related WIs: WI-000 (seed)
 
-### E2E-001: Docs UI loads offline
-Related WIs: WI-001
+## Scenario Template
+
+Scenario ID: E2E-###
+Related WIs: WI-###
 Preconditions:
-- Repo cloned.
 Steps:
-1) Open docs/index.html in a browser.
-Expected results:
-- Left navigation renders.
-- Default page content renders.
-Evidence required:
-- Screenshot saved under evidence/WI-001/
+Expected Results:
+Evidence Required:
 
-### E2E-002: CI enforces ASCII-only and line limits
-Related WIs: WI-001
+## E2E-001
+
+Scenario ID: E2E-001
+Related WIs: WI-000
+
 Preconditions:
-- GitHub Actions enabled.
-Steps:
-1) Introduce a prohibited non-ASCII character into a checked file and run CI.
-2) Increase a checked file beyond 500 lines and run CI.
-Expected results:
-- CI fails with deterministic messages.
-Evidence required:
-- CI run link recorded in the WI.
+- pipeline branch exists with the seeded app
+- Node.js is available in CI runner
 
-## Regression matrix
-- If docs UI changes: rerun E2E-001.
-- If policy tools change: rerun E2E-002.
+Steps:
+1) Checkout pipeline branch.
+2) Run: node pipeline_app/server.js
+3) Fetch: http://127.0.0.1:8080/
+4) Verify the response contains "FAVELLA DEVELOPMENT".
+
+Expected Results:
+- Server starts and returns index page with expected marker text.
+
+Evidence Required:
+- CI job log showing server start and successful fetch.

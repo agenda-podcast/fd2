@@ -1,0 +1,10 @@
+FD OUTPUT MODE (STRICT)
+
+Return ONLY:
+A) One JSON manifest object (see ARTIFACT_CONTRACT.txt).
+B) Zero or more file payload blocks as specified by the manifest.
+
+No preamble.
+No markdown.
+No explanations.
+No policy restatement.

@@ -1,0 +1,53 @@
+name: Orchestrate Work Item (Gemini -> Release -> Pipeline)
+
+on:
+  workflow_dispatch:
+    inputs:
+      wi_path:
+        description: Path to WI file in repo (main)
+        required: true
+        default: backlog/work_items/WI-003-seed-pipeline-app.md
+      role_guide:
+        description: Role guide file under agent_guides/
+        required: true
+        default: ROLE_FE.txt
+      artifact_type:
+        description: repo_patch or pipeline_snapshot
+        required: true
+        default: pipeline_snapshot
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Setup gh
+        uses: cli/cli@v2
+        with:
+          version: latest
+
+      - name: Authenticate gh
+        run: |
+          echo "${GITHUB_TOKEN}" | gh auth login --with-token
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run orchestrator
+        run: |
+          python3 tools/orchestrator/run_wi.py "${{ inputs.wi_path }}" "${{ inputs.role_guide }}" "${{ inputs.artifact_type }}"
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

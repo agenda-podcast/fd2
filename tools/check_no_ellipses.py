@@ -22,18 +22,16 @@ def main():
             if is_exempt(rel):
                 continue
             try:
-                with open(p, "rb") as f:
-                    data = f.read()
-                try:
-                    data.decode("ascii")
-                except UnicodeDecodeError:
+                with open(p, "r", encoding="utf-8", errors="ignore") as f:
+                    txt = f.read()
+                if "..." in txt:
                     bad.append(rel)
             except Exception:
                 continue
     if bad:
-        sys.stdout.write("FD_POLICY_FAIL: non-ascii-files=" + ",".join(sorted(bad)) + "\n")
+        sys.stdout.write("FD_POLICY_FAIL: ellipses-found=" + ",".join(sorted(bad)) + "\n")
         return 1
-    sys.stdout.write("FD_POLICY_OK: ascii\n")
+    sys.stdout.write("FD_POLICY_OK: no-ellipses\n")
     return 0
 
 if __name__ == "__main__":

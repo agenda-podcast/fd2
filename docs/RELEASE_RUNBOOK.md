@@ -2,31 +2,28 @@
 
 Canonical: docs/RELEASE_RUNBOOK.md
 
-## Release readiness criteria
+## Release Readiness
+
+A release is allowed only if:
 - All included WIs are Accepted.
 - CI is green on main.
-- E2E Verification executed for release scope.
-- Rollback steps present and sanity-checked.
-- Known limitations documented.
+- Required E2E verification for the release scope is executed.
+- Rollback steps exist and are reproducible.
+- Known limitations are documented.
 
-## Release procedure
-1) Create a git tag: fd-YYYYMMDD-N (example: fd-20260225-1)
-2) Publish GitHub Release notes:
-   - Included PRs and WIs
-   - Verification evidence links
-   - Known limitations
+## Rollback
 
-## Rollback procedure
-1) Identify previous known-good tag.
-2) Reset deployment target (Pages branch or main) to that tag.
-3) Confirm docs/index.html loads and CI is green.
+Rollback of pipeline branch:
+1) Identify the last known good Release tag.
+2) Download artifact.zip from that Release.
+3) Force-update pipeline branch to the contents of artifact.zip via the pipeline sync workflow.
+4) Re-run pipeline build workflow.
 
-## Release execution record (append-only)
-Add a new section per release:
-- Release ID / tag:
-- Date (America/New_York):
-- Included PRs:
-- Included WIs:
-- Verification evidence:
-- Incidents:
-- Post-release monitoring summary:
+## Release Execution Record
+
+For each release, capture:
+- Release tag
+- Included WIs
+- Verification evidence references (CI run IDs or logs)
+- Incidents and mitigations (if any)
+- Post-release monitoring notes

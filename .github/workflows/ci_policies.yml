@@ -1,0 +1,20 @@
+name: FD Policy Checks
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  policy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Policy - ASCII
+        run: python3 tools/check_ascii.py .
+      - name: Policy - Line limits
+        run: python3 tools/check_line_limits.py .
+      - name: Policy - No ellipses
+        run: python3 tools/check_no_ellipses.py .

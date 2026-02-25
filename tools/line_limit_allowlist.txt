@@ -1,2 +1,0 @@
-# Paths listed here are exempt from the <= 500 lines limit.
-# One path per line, relative to repo root.

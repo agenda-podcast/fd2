@@ -1,235 +1,65 @@
-/* FD Docs UI - no build, no dependencies. ASCII only. */
+(function(){
+  var docs = [
+    { title: "Start Here", path: "FD_DOCUMENTATION.md" },
+    { title: "Roles", path: "ROLES.md" },
+    { title: "WI Template", path: "WI_TEMPLATE.md" },
+    { title: "Milestone Template", path: "MILESTONE_TEMPLATE.md" },
+    { title: "E2E Verification", path: "E2E_VERIFICATION.md" },
+    { title: "Release Runbook", path: "RELEASE_RUNBOOK.md" }
+  ];
 
-(function () {
-  "use strict";
+  function byId(x){ return document.getElementById(x); }
 
-  var nav = [];
-  var current = null;
+  var nav = byId("navList");
+  var raw = byId("raw");
+  var render = byId("render");
+  var titleEl = byId("docTitle");
+  var copyBtn = byId("copyBtn");
 
-  function qs(id) { return document.getElementById(id); }
-
-  function toast(msg) {
-    var el = document.createElement("div");
-    el.className = "toast";
-    el.textContent = msg;
-    document.body.appendChild(el);
-    setTimeout(function () { el.classList.add("show"); }, 20);
-    setTimeout(function () {
-      el.classList.remove("show");
-      setTimeout(function () { el.remove(); }, 200);
-    }, 1400);
+  function setMode(showRaw){
+    raw.style.display = showRaw ? "block" : "none";
+    render.style.display = showRaw ? "none" : "block";
+    render.setAttribute("aria-hidden", showRaw ? "true" : "false");
   }
 
-  function escapeHtml(s) {
-    return s
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;");
-  }
-
-  function renderInline(s) {
-    // code
-    s = s.replace(/`([^`]+)`/g, function (_, m) {
-      return "<code>" + escapeHtml(m) + "</code>";
+  function loadDoc(item){
+    titleEl.textContent = item.title + " (" + item.path + ")";
+    fetch(item.path).then(function(r){
+      if(!r.ok){ throw new Error("Fetch failed: " + item.path); }
+      return r.text();
+    }).then(function(t){
+      raw.textContent = t;
+      render.innerHTML = window.MDLite.render(t);
+      setMode(false);
+    }).catch(function(e){
+      raw.textContent = String(e);
+      render.innerHTML = "";
+      setMode(true);
     });
-    // links [text](path)
-    s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, function (_, text, href) {
-      var safe = href.replace(/"/g, "%22");
-      return "<a href=\"" + safe + "\" target=\"_blank\" rel=\"noopener\">" + escapeHtml(text) + "</a>";
-    });
-    // bold **x**
-    s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-    // italics *x*
-    s = s.replace(/\*([^*]+)\*/g, "<em>$1</em>");
-    return s;
   }
 
-  function mdToHtml(md) {
-    var lines = md.replace(/\r\n/g, "\n").split("\n");
-    var out = [];
-    var inCode = false;
-    var inUl = false;
-
-    function closeUl() {
-      if (inUl) {
-        out.push("</ul>");
-        inUl = false;
-      }
-    }
-
-    for (var i = 0; i < lines.length; i++) {
-      var line = lines[i];
-
-      if (line.trim().startsWith("```")) {
-        if (!inCode) {
-          closeUl();
-          inCode = true;
-          out.push("<pre><code>");
-        } else {
-          inCode = false;
-          out.push("</code></pre>");
-        }
-        continue;
-      }
-
-      if (inCode) {
-        out.push(escapeHtml(line) + "\n");
-        continue;
-      }
-
-      if (line.startsWith("# ")) {
-        closeUl();
-        out.push("<h1>" + renderInline(escapeHtml(line.slice(2))) + "</h1>");
-        continue;
-      }
-      if (line.startsWith("## ")) {
-        closeUl();
-        out.push("<h2>" + renderInline(escapeHtml(line.slice(3))) + "</h2>");
-        continue;
-      }
-      if (line.startsWith("### ")) {
-        closeUl();
-        out.push("<h3>" + renderInline(escapeHtml(line.slice(4))) + "</h3>");
-        continue;
-      }
-
-      if (line.startsWith("- ")) {
-        if (!inUl) {
-          closeUl();
-          inUl = true;
-          out.push("<ul>");
-        }
-        out.push("<li>" + renderInline(escapeHtml(line.slice(2))) + "</li>");
-        continue;
-      } else {
-        closeUl();
-      }
-
-      if (line.trim() === "") {
-        out.push("");
-        continue;
-      }
-
-      out.push("<p>" + renderInline(escapeHtml(line)) + "</p>");
-    }
-
-    closeUl();
-    if (inCode) {
-      // Close if file ended mid-code; treat as closed.
-      out.push("</code></pre>");
-    }
-
-    return out.join("\n");
-  }
-
-  function setActiveNav(id) {
-    var items = document.querySelectorAll("#navList a");
-    for (var i = 0; i < items.length; i++) {
-      items[i].classList.toggle("active", items[i].dataset.id === id);
-    }
-  }
-
-  function pageUrlHash(id) {
-    return "#page=" + encodeURIComponent(id);
-  }
-
-  function readHashPageId() {
-    var h = (location.hash || "").replace(/^#/, "");
-    if (!h) return null;
-    var parts = h.split("&");
-    for (var i = 0; i < parts.length; i++) {
-      var kv = parts[i].split("=");
-      if (kv.length === 2 && kv[0] === "page") return decodeURIComponent(kv[1]);
-    }
-    return null;
-  }
-
-  function loadPageById(id) {
-    var page = null;
-    for (var i = 0; i < nav.length; i++) {
-      if (nav[i].id === id) page = nav[i];
-    }
-    if (!page) page = nav[0];
-
-    current = page;
-
-    setActiveNav(page.id);
-    qs("pageTitle").textContent = page.title;
-    qs("pageMeta").textContent = "Source: " + page.path;
-
-    fetch(page.path, { cache: "no-store" })
-      .then(function (r) { return r.text(); })
-      .then(function (txt) {
-        qs("renderTarget").innerHTML = mdToHtml(txt);
-      })
-      .catch(function (err) {
-        qs("renderTarget").innerHTML = "<p>Failed to load: " + escapeHtml(String(err)) + "</p>";
+  function initNav(){
+    docs.forEach(function(item, idx){
+      var li = document.createElement("li");
+      var a = document.createElement("a");
+      a.href = "#doc=" + encodeURIComponent(item.path);
+      a.textContent = item.title;
+      a.addEventListener("click", function(ev){
+        ev.preventDefault();
+        loadDoc(item);
+        history.replaceState(null, "", a.href);
       });
-  }
-
-  function buildNav() {
-    var ul = qs("navList");
-    ul.innerHTML = "";
-    for (var i = 0; i < nav.length; i++) {
-      (function (page) {
-        var li = document.createElement("li");
-        var a = document.createElement("a");
-        a.href = pageUrlHash(page.id);
-        a.textContent = page.title;
-        a.dataset.id = page.id;
-        a.addEventListener("click", function (e) {
-          e.preventDefault();
-          location.hash = pageUrlHash(page.id);
-        });
-        li.appendChild(a);
-        ul.appendChild(li);
-      })(nav[i]);
-    }
-  }
-
-  function copyText(s) {
-    return navigator.clipboard.writeText(s).then(function () {
-      toast("Copied");
-    }, function () {
-      toast("Copy failed");
+      li.appendChild(a);
+      nav.appendChild(li);
+      if(idx===0){ loadDoc(item); }
     });
   }
 
-  function initActions() {
-    qs("copyLinkBtn").addEventListener("click", function () {
-      if (!current) return;
-      var url = location.href.split("#")[0] + pageUrlHash(current.id);
-      copyText(url);
-    });
+  copyBtn.addEventListener("click", function(){
+    var t = raw.textContent || "";
+    if(!navigator.clipboard){ return; }
+    navigator.clipboard.writeText(t);
+  });
 
-    qs("copyRawBtn").addEventListener("click", function () {
-      if (!current) return;
-      fetch(current.path, { cache: "no-store" })
-        .then(function (r) { return r.text(); })
-        .then(function (txt) { return copyText(txt); })
-        .catch(function () { toast("Copy failed"); });
-    });
-  }
-
-  function init() {
-    initActions();
-    fetch("nav.json", { cache: "no-store" })
-      .then(function (r) { return r.json(); })
-      .then(function (j) {
-        nav = j;
-        buildNav();
-        var requested = readHashPageId();
-        loadPageById(requested || (nav[0] && nav[0].id) || "start");
-      })
-      .catch(function (err) {
-        qs("renderTarget").innerHTML = "<p>Failed to load nav.json: " + escapeHtml(String(err)) + "</p>";
-      });
-
-    window.addEventListener("hashchange", function () {
-      var requested = readHashPageId();
-      if (requested) loadPageById(requested);
-    });
-  }
-
-  init();
+  initNav();
 })();

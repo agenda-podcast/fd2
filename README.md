@@ -1,17 +1,11 @@
 # FAVELLA DEVELOPMENT (FD)
 
-Canonical documentation lives in `docs/FD_DOCUMENTATION.md`.
+FD is a GitHub-native, role-driven engineering system that produces working software via:
+- main branch: governance, templates, orchestrator, policy checks, docs UI
+- pipeline branch: runnable application snapshot
+- releases: immutable artifacts for each WI execution
 
-This repository is FD-only. Do not add content from other products.
-
-## Quick start (no build)
-Open `docs/index.html` in a browser.
-
-## GitHub Pages
-Publish from the `/docs` folder. See `docs/GITHUB_PAGES_SETUP.md`.
-
-## CI policy checks
-- ASCII-only (configurable allowlist)
-- Non-table logic/code files line limit (<= 500)
-
-See `.github/workflows/ci.yml` and `/tools`.
+Start here:
+- docs/index.html (static docs UI)
+- docs/FD_DOCUMENTATION.md
+- backlog/milestones/MS-000-foundation.md
