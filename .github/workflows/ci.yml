@@ -34,8 +34,6 @@ jobs:
           test -f docs/RELEASE_RUNBOOK.md
           echo "[fd][policy] Required docs present"
 
-
-jobs:
   fd_workflow_check:
     runs-on: ubuntu-latest
     steps:

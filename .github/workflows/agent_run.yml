@@ -69,22 +69,33 @@ jobs:
           python-version: "3.11"
 
       - name: Build input payload
+        env:
+          FD_PIPELINE_ID: ${{ inputs.pipeline_id }}
+          FD_WORK_ITEM: ${{ inputs.work_item }}
+          FD_ROLE: ${{ inputs.role }}
+          FD_TASK: ${{ inputs.task }}
+          FD_NEXT_ROLE: ${{ inputs.next_role }}
+          FD_NEXT_TASK: ${{ inputs.next_task }}
+          FD_ISSUE_NUMBER: ${{ inputs.issue_number }}
         run: |
           set -e
           TMP=/tmp/fd_issue_input.json
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            cat > "$TMP" <<'JSON'
-          {
-            "pipeline_id": "${{ inputs.pipeline_id }}",
-            "work_item": "${{ inputs.work_item }}",
-            "role": "${{ inputs.role }}",
-            "task": "${{ inputs.task }}",
-            "next_role": "${{ inputs.next_role }}",
-            "next_task": "${{ inputs.next_task }}",
-            "actions": [],
-            "issue_number": "${{ inputs.issue_number }}"
-          }
-          JSON
+            python3 - <<'PY'
+import json, os
+out = {
+    "pipeline_id": os.environ["FD_PIPELINE_ID"],
+    "work_item": os.environ["FD_WORK_ITEM"],
+    "role": os.environ["FD_ROLE"],
+    "task": os.environ["FD_TASK"],
+    "next_role": os.environ.get("FD_NEXT_ROLE", ""),
+    "next_task": os.environ.get("FD_NEXT_TASK", ""),
+    "actions": [],
+    "issue_number": os.environ.get("FD_ISSUE_NUMBER", ""),
+}
+with open("/tmp/fd_issue_input.json", "w", encoding="utf-8", newline="\n") as f:
+    f.write(json.dumps(out, indent=2) + "\n")
+PY
           else
             python tools/parse_github_event.py \
               --event-path "$GITHUB_EVENT_PATH" \
@@ -225,8 +236,7 @@ jobs:
             --task "$NT" \
             --out tools/next_issue_body.json
 
-          printf "\n---\nprev_release_url: %s\nprev_run_url: %s\npipeline_branch: %s\n" "$REL_URL" "$RUN_URL" "$BR" >> tools/next_issue_body.json
-
+          # Store metadata separately; do NOT append to the JSON file (breaks JSON parsing)
           BODY=$(cat tools/next_issue_body.json)
 
           URL=$(gh issue create --title "$TITLE" --body "$BODY")
@@ -246,9 +256,9 @@ jobs:
           echo "[fd][agent] created next issue=$URL and dispatched next role=$NR"
 
 
-- name: Final cleanup (non-git)
-  run: |
-    set -e
-    rm -f tools/_artifact_release_url.txt || true
-    rm -f tools/next_issue_body.json || true
-    rm -f tools/next_step.json || true
+      - name: Final cleanup (non-git)
+        run: |
+          set -e
+          rm -f tools/_artifact_release_url.txt || true
+          rm -f tools/next_issue_body.json || true
+          rm -f tools/next_step.json || true

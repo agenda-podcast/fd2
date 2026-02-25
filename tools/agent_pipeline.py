@@ -56,10 +56,14 @@ def read_role_config(role: str) -> Dict[str, Any]:
 
 
 def zip_dir(src_dir: str, zip_path: str) -> None:
+    abs_zip = os.path.abspath(zip_path)
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as z:
         for dirpath, _, filenames in os.walk(src_dir):
             for fn in filenames:
                 full = os.path.join(dirpath, fn)
+                # Skip the output ZIP itself to avoid a self-referential archive
+                if os.path.abspath(full) == abs_zip:
+                    continue
                 rel = os.path.relpath(full, src_dir)
                 z.write(full, arcname=rel)
 
@@ -70,7 +74,8 @@ def main() -> int:
     ap.add_argument("--out", required=True, help="output folder for this agent run")
     args = ap.parse_args()
 
-    payload = json.load(open(args.input, "r", encoding="utf-8"))
+    with open(args.input, "r", encoding="utf-8") as _f:
+        payload = json.load(_f)
 
     pipeline_id = safe_pipeline_id(str(payload.get("pipeline_id", "")).strip())
     work_item = safe_work_item(str(payload.get("work_item", "")).strip())

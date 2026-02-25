@@ -89,7 +89,8 @@ def main() -> int:
     }
 
     data = json.dumps(out, indent=2) + "\n"
-    data.encode("ascii")
+    if not data.isascii():
+        fail("non-ASCII characters in output JSON")
 
     with open(args.out, "w", encoding="utf-8", newline="\n") as f:
         f.write(data)

@@ -26,7 +26,8 @@ def main() -> int:
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
 
-    j = json.load(open(args.issue_input, "r", encoding="utf-8"))
+    with open(args.issue_input, "r", encoding="utf-8") as _f:
+        j = json.load(_f)
     out = {
         "pipeline_id": j["pipeline_id"],
         "work_item": j["work_item"],
@@ -38,7 +39,8 @@ def main() -> int:
     }
 
     data = json.dumps(out, indent=2) + "\n"
-    data.encode("ascii")
+    if not data.isascii():
+        fail("non-ASCII characters in output JSON")
     with open(args.out, "w", encoding="utf-8", newline="\n") as f:
         f.write(data)
     return 0

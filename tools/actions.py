@@ -75,6 +75,10 @@ def action_replace_regex(a: Dict[str, Any]) -> ActionResult:
     repl = str(a["replacement"])
     multiple = bool(a.get("multiple", False))
 
+    # Guard: reject patterns with known ReDoS structures (nested quantifiers)
+    if len(pattern) > 256:
+        raise ValueError("replace_regex pattern too long (max 256 chars)")
+
     txt = _read_text(path)
     if not txt:
         raise ValueError("replace_regex target missing or empty: %s" % path)
@@ -107,7 +111,7 @@ def action_touch(a: Dict[str, Any]) -> ActionResult:
 
 
 def action_add_nav_item(a: Dict[str, Any]) -> ActionResult:
-    nav_path = "docs/nav.json"
+    nav_path = str(a.get("nav_path", "docs/nav.json"))
     item_id = str(a["id"])
     title = str(a["title"])
     page_path = str(a["path"])

@@ -51,7 +51,8 @@ def main() -> int:
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
 
-    ev = json.load(open(args.event_path, "r", encoding="utf-8"))
+    with open(args.event_path, "r", encoding="utf-8") as _f:
+        ev = json.load(_f)
     issue = ev.get("issue") or {}
     body = (issue.get("body") or "").strip()
     number = issue.get("number")
@@ -89,7 +90,8 @@ def main() -> int:
     }
 
     data = json.dumps(out, indent=2) + "\n"
-    data.encode("ascii")
+    if not data.isascii():
+        fail("non-ASCII characters in output JSON")
 
     with open(args.out, "w", encoding="utf-8", newline="\n") as f:
         f.write(data)

@@ -18,6 +18,7 @@ ASCII-only.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from typing import Dict
 
@@ -34,8 +35,12 @@ DEFAULT_TASK = {
 
 
 def main() -> int:
-    path = "tools/issue_input.json"
-    j = json.load(open(path, "r", encoding="utf-8"))
+    path = os.path.join(os.path.dirname(__file__), "issue_input.json")
+    if not os.path.exists(path):
+        # Fallback: try relative to CWD for backwards compatibility
+        path = "tools/issue_input.json"
+    with open(path, "r", encoding="utf-8") as _f:
+        j = json.load(_f)
     nr = (j.get("next_role") or "").strip()
     nt = (j.get("next_task") or "").strip()
     role = (j.get("role") or "").strip()
