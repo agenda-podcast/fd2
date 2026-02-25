@@ -90,13 +90,11 @@ jobs:
           set -e
           pid=$(python -c "import json;print(json.load(open('/tmp/fd_issue_input.json'))['pipeline_id'])")
           echo "pid=$pid" >> $GITHUB_OUTPUT
-          echo "branch=pipeline/$pid" >> $GITHUB_OUTPUT\1
-- name: Sync pipeline branch with main
+          echo "branch=pipeline/$pid" >> $GITHUB_OUTPUT\1- name: Sync tools from main
   run: |
     set -e
     git fetch origin main
-    git merge --no-edit origin/main
-
+    git checkout origin/main -- tools
       - name: Materialize issue_input.json into repo
         run: |
           set -e
