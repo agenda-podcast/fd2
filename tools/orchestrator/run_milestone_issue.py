@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import datetime
 import os
+import shutil
 import sys
 import tempfile
 
@@ -29,6 +30,16 @@ def die(msg: str) -> None:
 
 def run_policy_checks(repo_root: str) -> None:
     cwd = os.getcwd()
+    # Remove runtime bytecode artifacts to keep policy checks deterministic
+    for dirpath, dirnames, filenames in os.walk(repo_root):
+        if "__pycache__" in dirnames:
+            shutil.rmtree(os.path.join(dirpath, "__pycache__"), ignore_errors=True)
+        for fn in filenames:
+            if fn.endswith(".pyc"):
+                try:
+                    os.remove(os.path.join(dirpath, fn))
+                except Exception:
+                    pass
     os.chdir(repo_root)
     try:
         if check_ascii_run(repo_root) != 0:

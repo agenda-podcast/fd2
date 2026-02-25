@@ -32,6 +32,11 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Clean Python bytecode
+        run: |
+          find . -type d -name __pycache__ -prune -exec rm -rf {} +
+          find . -type f -name "*.pyc" -delete
+
       - name: Ensure gh installed
         run: |
           if command -v gh >/dev/null 2>&1; then
