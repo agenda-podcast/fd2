@@ -8,6 +8,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 
 from src.fd_prompt import build_prompt_from_text
 from src.gemini_client import call_gemini
+from src.role_config import load_role_model_map, role_from_guide_filename, model_for_role, endpoint_base
 from src.fd_manifest import load_manifest_from_text
 from src.fd_apply import apply_manifest
 from src.fd_zip import zip_dir
@@ -74,7 +75,11 @@ def main() -> int:
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
     prompt = build_prompt_from_text(os.path.join(repo_root, "agent_guides"), role_guide_file, issue_text)
 
-    out_text = call_gemini(api_key, prompt, timeout_s=240)
+    role_map = load_role_model_map()
+    role = role_from_guide_filename(role_guide)
+    model = model_for_role(role, role_map)
+    ep_base = endpoint_base(role_map)
+    out_text = call_gemini(api_key, prompt, timeout_s=240, model=model, endpoint_base=ep_base)
     manifest = load_manifest_from_text(out_text)
 
     if manifest.work_item_id != ms_id:

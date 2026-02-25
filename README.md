@@ -49,3 +49,23 @@ Required for any Gemini agent run:
 Typical application secrets for a Telegram integration (used by the pipeline branch app, not by FD itself):
 - TELEGRAM_BOT_TOKEN
 - TELEGRAM_CHANNEL_ID
+
+
+## Role based Gemini model selection
+
+FD selects Gemini model per AI Agent role via `agent_guides/ROLE_MODEL_MAP.json`.
+
+- Non-coding roles (PM, Tech Lead, Tech Writer, QA) default to `gemini-2.5-flash-lite` (lowest cost).
+- DevOps defaults to `gemini-2.5-flash`.
+- Coding and review roles (FE, BE, Reviewer) default to `gemini-2.5-pro`.
+
+You can override at runtime:
+
+- `GEMINI_MODEL` to force a single model for all roles.
+- `GEMINI_ENDPOINT_BASE` to change the API base (default `https://generativelanguage.googleapis.com/v1beta`).
+
+The endpoint used is:
+
+`POST {endpoint_base}/models/{model}:generateContent`
+
+API key is provided via header `x-goog-api-key`.

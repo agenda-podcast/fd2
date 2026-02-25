@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 
 from src.fd_prompt import build_prompt
 from src.gemini_client import call_gemini
+from src.role_config import load_role_model_map, role_from_guide_filename, model_for_role, endpoint_base
 from src.fd_manifest import load_manifest_from_text
 from src.fd_apply import apply_manifest
 from src.fd_zip import zip_dir
