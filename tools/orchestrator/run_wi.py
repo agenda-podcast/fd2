@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import os
-import shutil
 import sys
 import tempfile
 import datetime
@@ -17,6 +16,7 @@ from src.fd_manifest import load_manifest_from_text
 from src.fd_apply import apply_manifest
 from src.fd_zip import zip_dir
 from src.fd_release import write_text, write_json, gh_release_create
+from src.github_api import get_issue
 from tools.check_ascii import run as check_ascii_run
 from tools.check_line_limits import run as check_lines_run
 from tools.check_no_ellipses import run as check_ellipses_run
@@ -25,68 +25,125 @@ def die(msg: str) -> None:
     sys.stdout.write(msg + "\n")
     raise SystemExit(1)
 
-def run_policy_checks(repo_root: str) -> None:
-    cwd = os.getcwd()
-    # Remove runtime bytecode artifacts to keep policy checks deterministic
-    for dirpath, dirnames, filenames in os.walk(repo_root):
-        if "__pycache__" in dirnames:
-            shutil.rmtree(os.path.join(dirpath, "__pycache__"), ignore_errors=True)
-        for fn in filenames:
-            if fn.endswith(".pyc"):
+def run_policy_checks(root: str) -> None:
+    # Remove python bytecode before checks
+    for p in Path(root).rglob("__pycache__"):
+        if p.is_dir():
+            for child in p.rglob("*"):
                 try:
-                    os.remove(os.path.join(dirpath, fn))
+                    child.unlink()
                 except Exception:
                     pass
-    os.chdir(repo_root)
-    try:
-        if check_ascii_run(repo_root) != 0:
-            die("FD_FAIL: policy ascii")
-        if check_lines_run(repo_root) != 0:
-            die("FD_FAIL: policy line limits")
-        if check_ellipses_run(repo_root) != 0:
-            die("FD_FAIL: policy ellipses")
-    finally:
-        os.chdir(cwd)
+            try:
+                p.rmdir()
+            except Exception:
+                pass
+    for p in Path(root).rglob("*.pyc"):
+        try:
+            p.unlink()
+        except Exception:
+            pass
+
+    if check_ascii_run(root) != 0:
+        die("FD_FAIL: policy ascii")
+    if check_lines_run(root) != 0:
+        die("FD_FAIL: policy line-limits")
+    if check_ellipses_run(root) != 0:
+        die("FD_FAIL: policy no-ellipses")
+
+def parse_producer_role(issue_body: str) -> str:
+    for line in issue_body.splitlines():
+        if line.strip().lower().startswith("owner role (producer):"):
+            return line.split(":", 1)[1].strip()
+    return ""
+
+def role_to_guide(role: str) -> str:
+    m = {
+        "Product Manager (PM)": "ROLE_PM.txt",
+        "Product Manager": "ROLE_PM.txt",
+        "Tech Lead (Architecture / Delivery Lead)": "ROLE_TECH_LEAD.txt",
+        "Frontend Engineer (FE)": "ROLE_FE.txt",
+        "Backend Engineer (BE)": "ROLE_BE.txt",
+        "DevOps / Platform Engineer": "ROLE_DEVOPS.txt",
+        "Code Reviewer": "ROLE_REVIEWER.txt",
+        "QA Lead": "ROLE_QA.txt",
+        "Technical Writer": "ROLE_TECH_WRITER.txt",
+    }
+    if role in m:
+        return m[role]
+    return ""
+
+def default_artifact_type_for_role(role: str) -> str:
+    # Only implementers/reviewer default to pipeline snapshots.
+    if role in ["Frontend Engineer (FE)", "Backend Engineer (BE)", "DevOps / Platform Engineer", "Code Reviewer"]:
+        return "pipeline_snapshot"
+    return "repo_patch"
 
 def main() -> int:
-    if len(sys.argv) != 4:
-        sys.stdout.write("usage: run_wi.py <WI_PATH> <ROLE_GUIDE_FILE> <ARTIFACT_TYPE>\n")
+    if len(sys.argv) < 2:
+        sys.stdout.write("usage: run_wi.py <issue_number> [ROLE_*.txt] [artifact_type]\n")
         return 2
 
-    wi_path = sys.argv[1]
-    role_guide_file = sys.argv[2]
-    artifact_type = sys.argv[3]
+    issue_number = int(sys.argv[1])
+    override_role_guide = sys.argv[2] if len(sys.argv) >= 3 else ""
+    override_artifact_type = sys.argv[3] if len(sys.argv) >= 4 else ""
+
+    token = os.environ.get("GITHUB_TOKEN", os.environ.get("GH_TOKEN", ""))
+    if token == "":
+        die("FD_FAIL: missing GITHUB_TOKEN")
+
+    issue = get_issue(issue_number, token)
+    title = issue.get("title", "")
+    body = issue.get("body", "") or ""
+
+    producer_role = parse_producer_role(body)
+    if producer_role == "" and override_role_guide == "":
+        die("FD_FAIL: cannot determine producer role from issue body and no role guide override provided")
+
+    role_guide_file = override_role_guide
+    if role_guide_file == "":
+        role_guide_file = role_to_guide(producer_role)
+        if role_guide_file == "":
+            die("FD_FAIL: unsupported producer role for auto guide mapping role=" + producer_role)
+
+    artifact_type = override_artifact_type if override_artifact_type != "" else default_artifact_type_for_role(producer_role)
 
     api_key = os.environ.get("GEMINI_API_KEY", "")
     if api_key == "":
         die("FD_FAIL: missing GEMINI_API_KEY")
 
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-    prompt = build_prompt(os.path.join(repo_root, "agent_guides"), role_guide_file, wi_path)
 
-    out_text = call_gemini(api_key, prompt, timeout_s=180)
+    guides_dir = os.path.join(repo_root, "agent_guides")
+    global_constraints = os.path.join(guides_dir, "GLOBAL_CONSTRAINTS.txt")
+    output_mode = os.path.join(guides_dir, "OUTPUT_MODE.txt")
+    role_guide_path = os.path.join(guides_dir, role_guide_file)
+
+    role_model_map = load_role_model_map(os.path.join(guides_dir, "ROLE_MODEL_MAP.json"))
+    role_name = role_from_guide_filename(role_guide_file)
+    model = model_for_role(role_model_map, role_name)
+
+    prompt = build_prompt(global_constraints, output_mode, role_guide_path, title, body, artifact_type)
+
+    out_text = call_gemini(api_key, prompt, timeout_s=240, model=model, endpoint_base=endpoint_base())
+
+    if out_text.strip() == "":
+        die("FD_FAIL: model returned empty output role=" + role_name + " model=" + model)
+
     manifest = load_manifest_from_text(out_text)
 
-    if manifest.artifact_type != artifact_type:
-        die("FD_FAIL: artifact_type mismatch expected=" + artifact_type)
-
     ts = datetime.datetime.utcnow().strftime("%Y%m%d-%H%M%S")
-    tag = "FD-" + manifest.work_item_id + "-" + manifest.producer_role.replace(" ", "_") + "-" + ts
+    tag = "FD-WI-" + str(issue_number) + "-" + role_name.replace(" ", "").upper() + "-" + ts
 
     with tempfile.TemporaryDirectory() as tmp:
         stage = os.path.join(tmp, "stage")
         os.makedirs(stage, exist_ok=True)
 
-        # Build output tree in stage:
-        # - If pipeline_snapshot: start from pipeline_base then apply manifest
-        # - If repo_patch: start from current repo and apply manifest (produces patch snapshot)
-        if artifact_type == "pipeline_snapshot":
-            _copy_tree(os.path.join(repo_root, "pipeline_base"), stage)
-        else:
-            _copy_tree(repo_root, stage)
-
         apply_manifest(manifest, stage)
         run_policy_checks(stage)
+
+        artifact_zip = os.path.join(tmp, "artifact.zip")
+        zip_dir(stage, artifact_zip)
 
         manifest_path = os.path.join(tmp, "manifest.json")
         write_json(manifest_path, {
@@ -100,82 +157,21 @@ def main() -> int:
             "verification_steps": manifest.verification_steps,
             "notes": manifest.notes,
             "files": [
-                {
-                    "path": f.path,
-                    "content_type": f.content_type,
-                    "encoding": f.encoding
-                } for f in manifest.files
+                {"path": f.path, "content_type": f.content_type, "encoding": f.encoding}
+                for f in manifest.files
             ],
             "delete": manifest.delete
         })
 
         verification_path = os.path.join(tmp, "verification_report.txt")
-        write_text(verification_path, "\n".join(manifest.verification_steps) + "\n")
+        write_text(verification_path, "\n".join(manifest.verification_steps))
 
-        zip_path = os.path.join(tmp, "artifact.zip")
-        zip_dir(stage, zip_path, exclude_prefixes=[".git/"])
+        # Publish release with artifact + manifest + report
+        gh_release_create(tag, [artifact_zip, manifest_path, verification_path])
 
-        notes = "FD WI artifact for " + manifest.work_item_id
-        gh_release_create(tag, tag, notes, [manifest_path, zip_path, verification_path])
+        sys.stdout.write("FD_OK: release=" + tag + "\n")
 
-        # Update pipeline branch when pipeline snapshot
-        if artifact_type == "pipeline_snapshot":
-            _sync_pipeline_branch(repo_root, zip_path, tag)
-
-    sys.stdout.write("FD_OK: release_tag=" + tag + "\n")
     return 0
-
-def _copy_tree(src: str, dst: str) -> None:
-    for dirpath, dirnames, filenames in os.walk(src):
-        rel = os.path.relpath(dirpath, src)
-        out_dir = os.path.join(dst, rel) if rel != "." else dst
-        os.makedirs(out_dir, exist_ok=True)
-        for fn in filenames:
-            s = os.path.join(dirpath, fn)
-            d = os.path.join(out_dir, fn)
-            with open(s, "rb") as rf:
-                data = rf.read()
-            with open(d, "wb") as wf:
-                wf.write(data)
-
-def _sync_pipeline_branch(repo_root: str, artifact_zip: str, release_tag: str) -> None:
-    import subprocess
-    import zipfile
-    tmp = tempfile.mkdtemp()
-    with zipfile.ZipFile(artifact_zip, "r") as z:
-        z.extractall(tmp)
-
-    def run(cmd):
-        subprocess.check_call(cmd, cwd=repo_root)
-
-    run(["git", "fetch", "origin"])
-    run(["git", "checkout", "-B", "pipeline"])
-    # Remove tracked files (except .git)
-    for item in os.listdir(repo_root):
-        if item == ".git":
-            continue
-        p = os.path.join(repo_root, item)
-        if os.path.isdir(p):
-            subprocess.check_call(["git", "rm", "-r", "-f", item], cwd=repo_root)
-        else:
-            subprocess.check_call(["git", "rm", "-f", item], cwd=repo_root)
-
-    # Copy extracted artifact into repo root
-    for dirpath, dirnames, filenames in os.walk(tmp):
-        rel = os.path.relpath(dirpath, tmp)
-        out_dir = os.path.join(repo_root, rel) if rel != "." else repo_root
-        os.makedirs(out_dir, exist_ok=True)
-        for fn in filenames:
-            s = os.path.join(dirpath, fn)
-            d = os.path.join(out_dir, fn)
-            with open(s, "rb") as rf:
-                data = rf.read()
-            with open(d, "wb") as wf:
-                wf.write(data)
-
-    run(["git", "add", "-A"])
-    run(["git", "commit", "-m", "Sync pipeline from " + release_tag])
-    run(["git", "push", "-f", "origin", "pipeline"])
 
 if __name__ == "__main__":
     raise SystemExit(main())
