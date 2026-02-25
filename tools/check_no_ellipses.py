@@ -8,8 +8,7 @@ def is_exempt(path):
     _, ext = os.path.splitext(path.lower())
     return ext in EXEMPT_EXT
 
-def main():
-    root = sys.argv[1] if len(sys.argv) > 1 else "."
+def run(root: str) -> int:
     bad = []
     for dirpath, dirnames, filenames in os.walk(root):
         if ".git" in dirnames:
@@ -33,6 +32,11 @@ def main():
         return 1
     sys.stdout.write("FD_POLICY_OK: no-ellipses\n")
     return 0
+
+
+def main() -> int:
+    root = sys.argv[1] if len(sys.argv) > 1 else "."
+    return run(root)
 
 if __name__ == "__main__":
     raise SystemExit(main())

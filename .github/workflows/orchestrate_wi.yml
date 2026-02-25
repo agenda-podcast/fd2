@@ -22,6 +22,8 @@ permissions:
 jobs:
   run:
     runs-on: ubuntu-latest
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
     steps:
       - name: Checkout main
         uses: actions/checkout@v4

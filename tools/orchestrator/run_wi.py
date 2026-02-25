@@ -5,6 +5,8 @@ import tempfile
 import datetime
 from pathlib import Path
 
+sys.dont_write_bytecode = True
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 from src.fd_prompt import build_prompt
@@ -14,9 +16,9 @@ from src.fd_manifest import load_manifest_from_text
 from src.fd_apply import apply_manifest
 from src.fd_zip import zip_dir
 from src.fd_release import write_text, write_json, gh_release_create
-from tools.check_ascii import main as check_ascii_main
-from tools.check_line_limits import main as check_lines_main
-from tools.check_no_ellipses import main as check_ellipses_main
+from tools.check_ascii import run as check_ascii_run
+from tools.check_line_limits import run as check_lines_run
+from tools.check_no_ellipses import run as check_ellipses_run
 
 def die(msg: str) -> None:
     sys.stdout.write(msg + "\n")
@@ -26,11 +28,11 @@ def run_policy_checks(repo_root: str) -> None:
     cwd = os.getcwd()
     os.chdir(repo_root)
     try:
-        if check_ascii_main(repo_root) != 0:
+        if check_ascii_run(repo_root) != 0:
             die("FD_FAIL: policy ascii")
-        if check_lines_main(repo_root) != 0:
+        if check_lines_run(repo_root) != 0:
             die("FD_FAIL: policy line limits")
-        if check_ellipses_main(repo_root) != 0:
+        if check_ellipses_run(repo_root) != 0:
             die("FD_FAIL: policy ellipses")
     finally:
         os.chdir(cwd)

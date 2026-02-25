@@ -14,8 +14,7 @@ def is_logic_file(path):
         return False
     return True
 
-def main():
-    root = sys.argv[1] if len(sys.argv) > 1 else "."
+def run(root: str) -> int:
     bad = []
     for dirpath, dirnames, filenames in os.walk(root):
         if ".git" in dirnames:
@@ -41,6 +40,11 @@ def main():
         return 1
     sys.stdout.write("FD_POLICY_OK: line-limits\n")
     return 0
+
+
+def main() -> int:
+    root = sys.argv[1] if len(sys.argv) > 1 else "."
+    return run(root)
 
 if __name__ == "__main__":
     raise SystemExit(main())

@@ -9,9 +9,17 @@ on:
 jobs:
   policy:
     runs-on: ubuntu-latest
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Clean Python bytecode
+        run: |
+          find . -type d -name __pycache__ -prune -exec rm -rf {} +
+          find . -type f -name "*.pyc" -delete
+
       - name: Policy - ASCII
         run: python3 tools/check_ascii.py .
       - name: Policy - Line limits
