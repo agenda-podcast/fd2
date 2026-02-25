@@ -40,20 +40,20 @@ Target Environment: Pipeline branch
 Problem / Goal (2-3 lines):
 
 In Scope:
-- ...
+- [omitted]
 
 Out of Scope:
-- ...
+- [omitted]
 
 Assumptions:
-- ...
+- [omitted]
 
 Dependencies (explicit IDs):
-- WI-...
+- WI-[omitted]
 
 Acceptance Criteria:
-AC1: Given ... When ... Then ...
-AC2: ...
+AC1: Given [omitted] When [omitted] Then [omitted]
+AC2: [omitted]
 
 Evidence Required:
 - Release asset list (artifact.zip, manifest.json, logs)
