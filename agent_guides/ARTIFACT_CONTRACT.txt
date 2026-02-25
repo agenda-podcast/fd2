@@ -25,4 +25,4 @@ Rules:
 - For text files: encoding MUST be "utf-8" and content MUST be ASCII only.
 - For binary: encoding MUST be "base64".
 - No file omissions: every produced file MUST be declared in files[].
-- All files MUST be fully specified (no placeholders like "...").
+- All files MUST be fully specified (no placeholders like "three dots")..

@@ -24,7 +24,7 @@ def main():
             try:
                 with open(p, "r", encoding="utf-8", errors="ignore") as f:
                     txt = f.read()
-                if "..." in txt:
+                if ("." * 3) in txt:
                     bad.append(rel)
             except Exception:
                 continue
