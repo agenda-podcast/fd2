@@ -58,3 +58,7 @@ If you create an Issue and nothing happens:
 - If a run exists but failed, open logs and fix the reported error.
 
 - Issue parsing reads $GITHUB_EVENT_PATH via tools/parse_github_event.py to avoid shell quoting issues.
+
+- Artifacts are stored as GitHub Actions run artifacts (not uploaded into the Issue attachments). The workflow comments the run link back to the Issue.
+
+- If next_role is missing/empty, the workflow infers the next role using tools/next_step.py and the default role chain: pm -> tech_lead -> be -> fe -> reviewer -> qa.

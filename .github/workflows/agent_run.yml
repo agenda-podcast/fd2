@@ -132,3 +132,67 @@ jobs:
             git commit -m "$WI $ROLE artifacts"
             git push origin "${{ steps.br.outputs.branch }}"
           fi
+
+      - name: Comment back with artifact link and pipeline branch (issues only)
+        if: ${{ github.event_name == 'issues' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          WI=$(python -c "import json;print(json.load(open('tools/issue_input.json'))['work_item'])")
+          ROLE=$(python -c "import json;print(json.load(open('tools/issue_input.json'))['role'])")
+          PID=$(python -c "import json;print(json.load(open('tools/issue_input.json'))['pipeline_id'])")
+          RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          BR="pipeline/$PID"
+          gh issue comment "${{ github.event.issue.number }}" --body "Agent ran role=$ROLE work_item=$WI pipeline=$PID. Pipeline branch: $BR. Artifacts: open the workflow run and download artifact 'fd-agent-artifacts'. Run: $RUN_URL"
+
+      - name: Create next agent issue (issues only)
+        if: ${{ github.event_name == 'issues' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          NS=$(python tools/next_step.py)
+          NR=$(python -c "import json;print(json.loads(\"$NS\")[\"next_role\"])" )
+          NT=$(python -c "import json;print(json.loads(\"$NS\")[\"next_task\"])" )
+          if [ -z "$NR" ]; then
+            echo "[fd][agent] no next_role; pipeline complete"
+            exit 0
+          fi
+          PID=$(python -c "import json;print(json.load(open('tools/issue_input.json'))['pipeline_id'])")
+          WI=$(python -c "import json;print(json.load(open('tools/issue_input.json'))['work_item'])")
+          TITLE="$WI next: $NR"
+          BODY=$(python - <<'PY'
+import json
+j=json.load(open("tools/issue_input.json"))
+out={
+  "pipeline_id": j["pipeline_id"],
+  "work_item": j["work_item"],
+  "role": (j.get("next_role","") or "").strip(),
+  "task": (j.get("next_task","") or "").strip(),
+  "next_role": "",
+  "next_task": "",
+  "actions": []
+}
+print(json.dumps(out, indent=2))
+PY
+)
+          gh issue create --title "$TITLE" --body "$BODY" --label "agent-run"
+
+      - name: Open PR when pipeline complete (issues only)
+        if: ${{ github.event_name == 'issues' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          NS=$(python tools/next_step.py)
+          NR=$(python -c "import json;print(json.loads(\"$NS\")[\"next_role\"])" )
+          if [ -n "$NR" ]; then
+            echo "[fd][agent] pipeline not complete; PR not opened"
+            exit 0
+          fi
+          PID=$(python -c "import json;print(json.load(open('tools/issue_input.json'))['pipeline_id'])")
+          WI=$(python -c "import json;print(json.load(open('tools/issue_input.json'))['work_item'])")
+          BR="pipeline/$PID"
+          gh pr create --title "$WI pipeline complete ($PID)" --body "Pipeline $PID complete. Branch: $BR. CI must pass." --base main --head "$BR" || true
+
