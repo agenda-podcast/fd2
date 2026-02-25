@@ -80,6 +80,8 @@ def main() -> int:
     model = model_for_role(role, role_map)
     ep_base = endpoint_base(role_map)
     out_text = call_gemini(api_key, prompt, timeout_s=240, model=model, endpoint_base=ep_base)
+    if (out_text or "").strip() == "":
+        die("FD_FAIL: model returned empty output role=" + role + " model=" + model)
     manifest = load_manifest_from_text(out_text)
 
     if manifest.work_item_id != ms_id:

@@ -62,7 +62,23 @@ def parse_manifest(obj: Dict[str, Any]) -> ArtifactManifest:
     )
 
 def load_manifest_from_text(text: str) -> ArtifactManifest:
-    obj = json.loads(text)
+    t = (text or "").strip()
+    if t == "":
+        raise ValueError("manifest text is empty")
+    # Some models may wrap JSON in code fences or prepend small prefixes.
+    if t.startswith("```"):
+        lines = t.splitlines()
+        if len(lines) >= 3 and lines[0].startswith("```") and lines[-1].startswith("```"):
+            t = "\n".join(lines[1:-1]).strip()
+    try:
+        obj = json.loads(t)
+    except json.JSONDecodeError:
+        # Best-effort extraction: parse the first JSON object in the output.
+        start = t.find("{")
+        end = t.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            raise ValueError("manifest JSON not found in model output")
+        obj = json.loads(t[start:end+1])
     if not isinstance(obj, dict):
         raise ValueError("manifest is not a JSON object")
     return parse_manifest(obj)

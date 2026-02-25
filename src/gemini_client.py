@@ -29,7 +29,12 @@ def call_gemini(api_key: str, prompt: str, timeout_s: int = 240, model: str | No
                 "role": "user",
                 "parts": [{"text": prompt}],
             }
-        ]
+        ],
+        "generationConfig": {
+            "temperature": 0.2,
+            "maxOutputTokens": 8192,
+            "responseMimeType": "application/json"
+        }
     }
 
     body = json.dumps(payload).encode("utf-8")
