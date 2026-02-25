@@ -33,5 +33,10 @@
     "id": "agents",
     "title": "Agents (Executable)",
     "path": "AGENTS.md"
+  },
+  {
+    "id": "stability",
+    "title": "Stability Rule",
+    "path": "PROCESS_STABILITY_RULE.md"
   }
 ]

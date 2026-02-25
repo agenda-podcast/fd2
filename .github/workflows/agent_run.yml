@@ -53,7 +53,7 @@ jobs:
       (github.event_name == 'issues' && contains(github.event.issue.labels.*.name, 'agent-run'))
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout (main)
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -63,7 +63,7 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Build input payload (write to /tmp)
+      - name: Build input payload
         run: |
           set -e
           TMP=/tmp/fd_issue_input.json
@@ -90,8 +90,8 @@ jobs:
         run: |
           set -e
           pid=$(python -c "import json;print(json.load(open('/tmp/fd_issue_input.json'))['pipeline_id'])")
-          echo "pid=$pid" >> "$GITHUB_OUTPUT"
-          echo "branch=pipeline/$pid" >> "$GITHUB_OUTPUT"
+          echo "pid=$pid" >> $GITHUB_OUTPUT
+          echo "branch=pipeline/$pid" >> $GITHUB_OUTPUT
 
       - name: Checkout or create pipeline branch
         run: |
@@ -99,19 +99,17 @@ jobs:
           BR="${{ steps.br.outputs.branch }}"
           git config user.name "fd-agent-bot"
           git config user.email "fd-agent-bot@users.noreply.github.com"
-          git fetch origin main
           if git show-ref --verify --quiet "refs/remotes/origin/$BR"; then
             git checkout -b "$BR" "origin/$BR"
           else
-            git checkout -b "$BR" "origin/main"
+            git checkout -b "$BR"
           fi
 
-      - name: Sync tools from main into pipeline branch
+      - name: Sync tools from main
         run: |
           set -e
           git fetch origin main
-          git checkout origin/main -- tools || true
-          git checkout origin/main -- .github/workflows/agent_run.yml || true
+          git checkout origin/main -- tools
 
       - name: Materialize issue_input.json into repo
         run: |
@@ -139,33 +137,33 @@ jobs:
             evidence/**/AGENT_META.json
 
       - name: Publish ZIP as Release asset (tangible)
-  env:
-    GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  run: |
-    set -e
-    WI=$(python -c "import json;print(json.load(open('/tmp/fd_issue_input.json'))['work_item'])")
-    ROLE=$(python -c "import json;print(json.load(open('/tmp/fd_issue_input.json'))['role'])")
-    PID=$(python -c "import json;print(json.load(open('/tmp/fd_issue_input.json'))['pipeline_id'])")
-    ASSET_PATH=$(ls -1 evidence/"$WI"/"$ROLE"/ARTIFACTS.zip | head -n 1)
-    TAG="fd-artifact-${WI}-${ROLE}-${{ github.run_id }}"
-    TITLE="FD Artifact ${WI} ${ROLE} run ${{ github.run_id }}"
-    gh release create "$TAG" "$ASSET_PATH" --title "$TITLE" --notes "Auto-published agent artifact for $WI/$ROLE (pipeline $PID)." --prerelease --latest=false ||             gh release upload "$TAG" "$ASSET_PATH" --clobber
-    REL_URL="https://github.com/${{ github.repository }}/releases/tag/$TAG"
-    echo "$REL_URL" > tools/_artifact_release_url.txt
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          WI=$(python -c "import json;print(json.load(open('/tmp/fd_issue_input.json'))['work_item'])")
+          ROLE=$(python -c "import json;print(json.load(open('/tmp/fd_issue_input.json'))['role'])")
+          PID=$(python -c "import json;print(json.load(open('/tmp/fd_issue_input.json'))['pipeline_id'])")
+          ASSET_PATH=$(ls -1 evidence/"$WI"/"$ROLE"/ARTIFACTS.zip | head -n 1)
+          TAG="fd-artifact-${WI}-${ROLE}-${{ github.run_id }}"
+          TITLE="FD Artifact ${WI} ${ROLE} run ${{ github.run_id }}"
+          gh release create "$TAG" "$ASSET_PATH" --title "$TITLE" --notes "Auto-published agent artifact for $WI/$ROLE (pipeline $PID)." --prerelease --latest=false || \
+            gh release upload "$TAG" "$ASSET_PATH" --clobber
+          REL_URL="https://github.com/${{ github.repository }}/releases/tag/$TAG"
+          echo "$REL_URL" > tools/_artifact_release_url.txt
 
-- name: Cleanup ZIP artifacts before commit
+      - name: Cleanup ZIP artifacts before commit
         run: |
           set -e
           find evidence -type f -name "ARTIFACTS.zip" -print -delete || true
           rm -f tools/next_step.json || true
           rm -f tools/next_issue_body.json || true
           rm -f tools/_artifact_release_url.txt || true
-          rm -f tools/next_issue_body.json || true
 
-      - name: Commit artifacts and changes to pipeline branch
+      - name: Commit artifacts to pipeline branch
         run: |
           set -e
-          git add tools evidence .github/workflows/agent_run.yml || true
+          git add evidence tools/issue_input.json || true
           if [ -n "$(git status --porcelain)" ]; then
             WI=$(python -c "import json;print(json.load(open('/tmp/fd_issue_input.json'))['work_item'])")
             ROLE=$(python -c "import json;print(json.load(open('/tmp/fd_issue_input.json'))['role'])")
@@ -173,7 +171,7 @@ jobs:
             git push origin "${{ steps.br.outputs.branch }}"
           fi
 
-      - name: Comment back with run link (issues only)
+      - name: Comment back with artifact link and pipeline branch (issues only)
         if: ${{ github.event_name == 'issues' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -184,52 +182,12 @@ jobs:
           PID=$(python -c "import json;print(json.load(open('/tmp/fd_issue_input.json'))['pipeline_id'])")
           RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           BR="pipeline/$PID"
-          REL_URL=$(cat tools/_artifact_release_url.txt 2>/dev/null || true)
+          # If release URL file exists, include it; otherwise blank.
+          REL_URL=""
+          if [ -f tools/_artifact_release_url.txt ]; then REL_URL=$(cat tools/_artifact_release_url.txt); fi
           gh issue comment "${{ github.event.issue.number }}" --body "Agent ran role=$ROLE work_item=$WI pipeline=$PID. Pipeline branch: $BR. Tangible ZIP (Release asset): $REL_URL . Run: $RUN_URL"
 
-      - name: Create next agent issue (issues only)
-        if: ${{ github.event_name == 'issues' }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-set -e
-python tools/next_step.py > tools/next_step.json
-NR=$(python -c "import json;print(json.load(open('tools/next_step.json'))['next_role'])")
-NT=$(python -c "import json;print(json.load(open('tools/next_step.json'))['next_task'])")
-if [ -z "$NR" ]; then
-  echo "[fd][agent] pipeline complete (no next role)"
-  exit 0
-fi
-
-WI=$(python -c "import json;print(json.load(open('/tmp/fd_issue_input.json'))['work_item'])")
-PID=$(python -c "import json;print(json.load(open('/tmp/fd_issue_input.json'))['pipeline_id'])")
-BR="pipeline/$PID"
-RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-REL_URL=$(cat tools/_artifact_release_url.txt 2>/dev/null || true)
-
-TITLE="$WI next: $NR"
-
-python tools/build_next_issue_body.py             --issue-input tools/issue_input.json             --role "$NR"             --task "$NT"             --out tools/next_issue_body.json
-
-cat >> tools/next_issue_body.json <<EOF
-
----
-prev_release_url: $REL_URL
-prev_run_url: $RUN_URL
-pipeline_branch: $BR
-EOF
-
-BODY=$(cat tools/next_issue_body.json)
-
-URL=$(gh issue create --title "$TITLE" --body "$BODY")
-NUM=$(echo "$URL" | sed -n 's#.*/issues/##p')
-gh issue edit "$NUM" --add-label "agent-run"
-
-gh workflow run agent_run.yml --ref main             -f pipeline_id="$PID"             -f work_item="$WI"             -f role="$NR"             -f task="$NT"             -f next_role=""             -f next_task=""
-
-echo "[fd][agent] created next issue=$URL and dispatched next role=$NR"
-
-      - name: Open PR when pipeline complete (issues only)
+      - name: Create next agent issue and auto-start next run (issues only)
         if: ${{ github.event_name == 'issues' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -237,11 +195,42 @@ echo "[fd][agent] created next issue=$URL and dispatched next role=$NR"
           set -e
           python tools/next_step.py > tools/next_step.json
           NR=$(python -c "import json;print(json.load(open('tools/next_step.json'))['next_role'])")
-          if [ -n "$NR" ]; then
-            echo "[fd][agent] pipeline not complete; PR not opened"
+          NT=$(python -c "import json;print(json.load(open('tools/next_step.json'))['next_task'])")
+          if [ -z "$NR" ]; then
+            echo "[fd][agent] pipeline complete (no next role)"
             exit 0
           fi
-          PID=$(python -c "import json;print(json.load(open('/tmp/fd_issue_input.json'))['pipeline_id'])")
+
           WI=$(python -c "import json;print(json.load(open('/tmp/fd_issue_input.json'))['work_item'])")
+          PID=$(python -c "import json;print(json.load(open('/tmp/fd_issue_input.json'))['pipeline_id'])")
           BR="pipeline/$PID"
-          gh pr create --title "$WI pipeline complete ($PID)" --body "Pipeline $PID complete. Branch: $BR. CI must pass." --base main --head "$BR" || true
+          RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          REL_URL=""
+          if [ -f tools/_artifact_release_url.txt ]; then REL_URL=$(cat tools/_artifact_release_url.txt); fi
+
+          TITLE="$WI next: $NR"
+
+          python tools/build_next_issue_body.py \
+            --issue-input tools/issue_input.json \
+            --role "$NR" \
+            --task "$NT" \
+            --out tools/next_issue_body.json
+
+          printf "\n---\nprev_release_url: %s\nprev_run_url: %s\npipeline_branch: %s\n" "$REL_URL" "$RUN_URL" "$BR" >> tools/next_issue_body.json
+
+          BODY=$(cat tools/next_issue_body.json)
+
+          URL=$(gh issue create --title "$TITLE" --body "$BODY")
+          NUM=$(echo "$URL" | sed -n 's#.*/issues/##p')
+          gh issue edit "$NUM" --add-label "agent-run"
+
+          # Start next agent without relying on issue event timing.
+          gh workflow run agent_run.yml --ref main \
+            -f pipeline_id="$PID" \
+            -f work_item="$WI" \
+            -f role="$NR" \
+            -f task="$NT" \
+            -f next_role="" \
+            -f next_task=""
+
+          echo "[fd][agent] created next issue=$URL and dispatched next role=$NR"

@@ -33,3 +33,14 @@ jobs:
           test -f docs/E2E_VERIFICATION.md
           test -f docs/RELEASE_RUNBOOK.md
           echo "[fd][policy] Required docs present"
+
+
+jobs:
+  fd_workflow_check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate workflows (fd)
+        run: |
+          set -e
+          python3 tools/validate_workflows.py
