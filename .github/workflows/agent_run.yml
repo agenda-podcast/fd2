@@ -24,14 +24,14 @@ on:
         default: "Define next step"
         type: string
       next_role:
-        description: "Next role id (empty means pipeline complete)"
+        description: "Next role id (empty means infer next role)"
         required: false
-        default: "tech_lead"
+        default: ""
         type: string
       next_task:
-        description: "Next task for next role"
+        description: "Next task for next role (optional)"
         required: false
-        default: "Define technical approach and WI decomposition"
+        default: ""
         type: string
 
   issues:
@@ -92,12 +92,23 @@ jobs:
           echo "pid=$pid" >> $GITHUB_OUTPUT
           echo "branch=pipeline/$pid" >> $GITHUB_OUTPUT
 
-      \1
-- name: Materialize issue_input.json into repo
-  run: |
-    set -e
-    mkdir -p tools
-    cp -f /tmp/fd_issue_input.json tools/issue_input.json
+      - name: Checkout or create pipeline branch
+        run: |
+          set -e
+          BR="${{ steps.br.outputs.branch }}"
+          git config user.name "fd-agent-bot"
+          git config user.email "fd-agent-bot@users.noreply.github.com"
+          if git show-ref --verify --quiet "refs/remotes/origin/$BR"; then
+            git checkout -b "$BR" "origin/$BR"
+          else
+            git checkout -b "$BR"
+          fi
+
+      - name: Materialize issue_input.json into repo
+        run: |
+          set -e
+          mkdir -p tools
+          cp -f /tmp/fd_issue_input.json tools/issue_input.json
 
       - name: Run agent pipeline
         run: |
@@ -123,6 +134,7 @@ jobs:
           set -e
           find evidence -type f -name "ARTIFACTS.zip" -print -delete || true
           rm -f tools/next_step.json || true
+          rm -f tools/next_issue_body.json || true
 
       - name: Commit artifacts to pipeline branch
         run: |
@@ -146,7 +158,7 @@ jobs:
           PID=$(python -c "import json;print(json.load(open('/tmp/fd_issue_input.json'))['pipeline_id'])")
           RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           BR="pipeline/$PID"
-          gh issue comment "${{ github.event.issue.number }}" --body "Agent ran role=$ROLE work_item=$WI pipeline=$PID. Pipeline branch: $BR. Artifacts: open the workflow run and download artifact 'fd-agent-artifacts'. Run: $RUN_URL"
+          gh issue comment "${{ github.event.issue.number }}" --body "Agent ran role=$ROLE work_item=$WI pipeline=$PID. Pipeline branch: $BR. Download artifact 'fd-agent-artifacts' from the run: $RUN_URL"
 
       - name: Create next agent issue (issues only)
         if: ${{ github.event_name == 'issues' }}
@@ -158,13 +170,16 @@ jobs:
           NR=$(python -c "import json;print(json.load(open('tools/next_step.json'))['next_role'])")
           NT=$(python -c "import json;print(json.load(open('tools/next_step.json'))['next_task'])")
           if [ -z "$NR" ]; then
-            echo "[fd][agent] no next_role; pipeline complete"
+            echo "[fd][agent] pipeline complete (no next role)"
             exit 0
           fi
-          PID=$(python -c "import json;print(json.load(open('/tmp/fd_issue_input.json'))['pipeline_id'])")
           WI=$(python -c "import json;print(json.load(open('/tmp/fd_issue_input.json'))['work_item'])")
           TITLE="$WI next: $NR"
-          python tools/build_next_issue_body.py --issue-input tools/issue_input.json --role "$NR" --task "$NT" --out tools/next_issue_body.json
+          python tools/build_next_issue_body.py \
+            --issue-input tools/issue_input.json \
+            --role "$NR" \
+            --task "$NT" \
+            --out tools/next_issue_body.json
           BODY=$(cat tools/next_issue_body.json)
           gh issue create --title "$TITLE" --body "$BODY" --label "agent-run"
 
@@ -184,4 +199,3 @@ jobs:
           WI=$(python -c "import json;print(json.load(open('/tmp/fd_issue_input.json'))['work_item'])")
           BR="pipeline/$PID"
           gh pr create --title "$WI pipeline complete ($PID)" --body "Pipeline $PID complete. Branch: $BR. CI must pass." --base main --head "$BR" || true
-
