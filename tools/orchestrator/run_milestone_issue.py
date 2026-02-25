@@ -76,7 +76,7 @@ def main() -> int:
     prompt = build_prompt_from_text(os.path.join(repo_root, "agent_guides"), role_guide_file, issue_text)
 
     role_map = load_role_model_map()
-    role = role_from_guide_filename(role_guide)
+    role = role_from_guide_filename(role_guide_file)
     model = model_for_role(role, role_map)
     ep_base = endpoint_base(role_map)
     out_text = call_gemini(api_key, prompt, timeout_s=240, model=model, endpoint_base=ep_base)
