@@ -65,9 +65,9 @@ jobs:
       - name: Build input payload
         run: |
           set -e
-          mkdir -p tools
+          TMP=/tmp/fd_issue_input.json
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            cat > tools/issue_input.json <<'JSON'
+            cat > "$TMP" <<'JSON'
           {
             "pipeline_id": "${{ inputs.pipeline_id }}",
             "work_item": "${{ inputs.work_item }}",
@@ -81,34 +81,29 @@ jobs:
           else
             python tools/parse_github_event.py \
               --event-path "$GITHUB_EVENT_PATH" \
-              --out tools/issue_input.json
+              --out "$TMP"
           fi
 
       - name: Determine pipeline branch
         id: br
         run: |
           set -e
-          pid=$(python -c "import json;print(json.load(open('tools/issue_input.json'))['pipeline_id'])")
+          pid=$(python -c "import json;print(json.load(open('/tmp/fd_issue_input.json'))['pipeline_id'])")
           echo "pid=$pid" >> $GITHUB_OUTPUT
           echo "branch=pipeline/$pid" >> $GITHUB_OUTPUT
 
-      - name: Checkout or create pipeline branch
-        run: |
-          set -e
-          BR="${{ steps.br.outputs.branch }}"
-          git config user.name "fd-agent-bot"
-          git config user.email "fd-agent-bot@users.noreply.github.com"
-          if git show-ref --verify --quiet "refs/remotes/origin/$BR"; then
-            git checkout -b "$BR" "origin/$BR"
-          else
-            git checkout -b "$BR"
-          fi
+      \1
+- name: Materialize issue_input.json into repo
+  run: |
+    set -e
+    mkdir -p tools
+    cp -f /tmp/fd_issue_input.json tools/issue_input.json
 
       - name: Run agent pipeline
         run: |
           set -e
-          WI=$(python -c "import json;print(json.load(open('tools/issue_input.json'))['work_item'])")
-          ROLE=$(python -c "import json;print(json.load(open('tools/issue_input.json'))['role'])")
+          WI=$(python -c "import json;print(json.load(open('/tmp/fd_issue_input.json'))['work_item'])")
+          ROLE=$(python -c "import json;print(json.load(open('/tmp/fd_issue_input.json'))['role'])")
           OUTDIR="evidence/${WI}/${ROLE}"
           mkdir -p "$OUTDIR"
           python tools/agent_pipeline.py --input tools/issue_input.json --out "$OUTDIR"
@@ -134,8 +129,8 @@ jobs:
           set -e
           git add evidence tools/issue_input.json || true
           if [ -n "$(git status --porcelain)" ]; then
-            WI=$(python -c "import json;print(json.load(open('tools/issue_input.json'))['work_item'])")
-            ROLE=$(python -c "import json;print(json.load(open('tools/issue_input.json'))['role'])")
+            WI=$(python -c "import json;print(json.load(open('/tmp/fd_issue_input.json'))['work_item'])")
+            ROLE=$(python -c "import json;print(json.load(open('/tmp/fd_issue_input.json'))['role'])")
             git commit -m "$WI $ROLE artifacts"
             git push origin "${{ steps.br.outputs.branch }}"
           fi
@@ -146,9 +141,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e
-          WI=$(python -c "import json;print(json.load(open('tools/issue_input.json'))['work_item'])")
-          ROLE=$(python -c "import json;print(json.load(open('tools/issue_input.json'))['role'])")
-          PID=$(python -c "import json;print(json.load(open('tools/issue_input.json'))['pipeline_id'])")
+          WI=$(python -c "import json;print(json.load(open('/tmp/fd_issue_input.json'))['work_item'])")
+          ROLE=$(python -c "import json;print(json.load(open('/tmp/fd_issue_input.json'))['role'])")
+          PID=$(python -c "import json;print(json.load(open('/tmp/fd_issue_input.json'))['pipeline_id'])")
           RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           BR="pipeline/$PID"
           gh issue comment "${{ github.event.issue.number }}" --body "Agent ran role=$ROLE work_item=$WI pipeline=$PID. Pipeline branch: $BR. Artifacts: open the workflow run and download artifact 'fd-agent-artifacts'. Run: $RUN_URL"
@@ -166,8 +161,8 @@ jobs:
             echo "[fd][agent] no next_role; pipeline complete"
             exit 0
           fi
-          PID=$(python -c "import json;print(json.load(open('tools/issue_input.json'))['pipeline_id'])")
-          WI=$(python -c "import json;print(json.load(open('tools/issue_input.json'))['work_item'])")
+          PID=$(python -c "import json;print(json.load(open('/tmp/fd_issue_input.json'))['pipeline_id'])")
+          WI=$(python -c "import json;print(json.load(open('/tmp/fd_issue_input.json'))['work_item'])")
           TITLE="$WI next: $NR"
           python tools/build_next_issue_body.py --issue-input tools/issue_input.json --role "$NR" --task "$NT" --out tools/next_issue_body.json
           BODY=$(cat tools/next_issue_body.json)
@@ -185,8 +180,8 @@ jobs:
             echo "[fd][agent] pipeline not complete; PR not opened"
             exit 0
           fi
-          PID=$(python -c "import json;print(json.load(open('tools/issue_input.json'))['pipeline_id'])")
-          WI=$(python -c "import json;print(json.load(open('tools/issue_input.json'))['work_item'])")
+          PID=$(python -c "import json;print(json.load(open('/tmp/fd_issue_input.json'))['pipeline_id'])")
+          WI=$(python -c "import json;print(json.load(open('/tmp/fd_issue_input.json'))['work_item'])")
           BR="pipeline/$PID"
           gh pr create --title "$WI pipeline complete ($PID)" --body "Pipeline $PID complete. Branch: $BR. CI must pass." --base main --head "$BR" || true
 
