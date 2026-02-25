@@ -82,22 +82,3 @@ def load_manifest_from_text(text: str) -> ArtifactManifest:
     if not isinstance(obj, dict):
         raise ValueError("manifest is not a JSON object")
     return parse_manifest(obj)
-
-
-def extract_manifest_json(text: str) -> str:
-    t = text.strip()
-    if t.startswith("```"):
-        # Remove code fences
-        lines = []
-        for line in t.splitlines():
-            s = line.strip()
-            if s.startswith("```"):
-                continue
-            lines.append(line)
-        t = "\n".join(lines).strip()
-    start = t.find("{")
-    end = t.rfind("}")
-    if start == -1 or end == -1 or end <= start:
-        raise ValueError("manifest JSON not found in model output")
-    obj = json.loads(t[start:end+1])
-    return json.dumps(obj, ensure_ascii=True, sort_keys=True, indent=2)

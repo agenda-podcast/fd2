@@ -1,137 +1,179 @@
 #!/usr/bin/env python3
 import os
-import re
+import shutil
 import sys
 import tempfile
-import shutil
 import datetime
 from pathlib import Path
-from typing import Dict
 
-from src.github_api import get_issue, create_comment, close_issue
+sys.dont_write_bytecode = True
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+
+from src.fd_prompt import build_prompt
 from src.gemini_client import call_gemini
-from src.fd_manifest import load_manifest_from_text, extract_manifest_json
+from src.role_config import load_role_model_map, model_for_role, endpoint_base
+from src.fd_manifest import load_manifest_from_text
 from src.fd_apply import apply_manifest
-from src.fd_release import gh_release_create
-from src.role_config import get_model_for_role, get_endpoint_base
+from src.fd_zip import zip_dir
+from src.fd_release import write_text, write_json, gh_release_create
+from src.github_api import get_issue, create_comment, close_issue, list_open_issues, dispatch_workflow
+from tools.check_ascii import run as check_ascii_run
+from tools.check_line_limits import run as check_lines_run
+from tools.check_no_ellipses import run as check_ellipses_run
 
-def die(msg: str) -> None:
-    sys.stdout.write(msg + "\n")
-    raise SystemExit(1)
+def die(msg: str, code: int = 2) -> int:
+    print(msg)
+    return code
 
-def _read(path: Path) -> str:
-    return path.read_text(encoding="utf-8")
+def _extract_field(text: str, key: str) -> str:
+    for line in text.splitlines():
+        if line.startswith(key + ":"):
+            return line.split(":", 1)[1].strip()
+    return ""
 
-def _field(body: str, key: str) -> str:
-    m = re.search(r"^" + re.escape(key) + r"\s*(.+?)\s*$", body, re.M)
-    return m.group(1).strip() if m else ""
+def _task_key(task_num: str):
+    if task_num.strip() == "":
+        return (999, [])
+    parts = []
+    for p in task_num.split("."):
+        p = p.strip()
+        if p == "":
+            continue
+        try:
+            parts.append(int(p))
+        except Exception:
+            parts.append(999)
+    return (len(parts), parts)
 
-def _ms_id(body: str) -> str:
-    ms = _field(body, "Milestone ID:")
-    return ms if ms != "" else "MS-UNKNOWN"
+def pick_next_wi_issue_number(token: str) -> int:
+    items = list_open_issues(token)
+    best = None
+    for it in items:
+        if it.get("pull_request") is not None:
+            continue
+        title = str(it.get("title") or "")
+        if not title.startswith("Work Item:") and not title.startswith("WI-"):
+            continue
+        body = str(it.get("body") or "")
+        tn = _extract_field(body, "Task Number")
+        key = (_task_key(tn), str(it.get("number") or ""))
+        if best is None or key < best[0]:
+            best = (key, int(it.get("number")))
+    return 0 if best is None else best[1]
 
-def _work_branch(ms_id: str) -> str:
-    safe = re.sub(r"[^A-Za-z0-9_-]", "-", ms_id)
-    return "work/" + safe
+def role_guide_for_issue_body(body: str) -> str:
+    recv = _extract_field(body, "Receiver Role (Next step)")
+    m = recv.lower()
+    if "backend" in m or "(be" in m or " be" in m:
+        return "ROLE_BE.txt"
+    if "frontend" in m or "(fe" in m or " fe" in m:
+        return "ROLE_FE.txt"
+    if "devops" in m or "platform" in m:
+        return "ROLE_DEVOPS.txt"
+    if "review" in m:
+        return "ROLE_REVIEWER.txt"
+    if "qa" in m:
+        return "ROLE_QA.txt"
+    if "tech lead" in m:
+        return "ROLE_TECH_LEAD.txt"
+    if "pm" in m:
+        return "ROLE_PM.txt"
+    if "writer" in m:
+        return "ROLE_TECH_WRITER.txt"
+    return "ROLE_BE.txt"
 
-def _role_name_from_guide(role_guide_file: str) -> str:
-    # Example: ROLE_BE.txt -> Backend Engineer (BE)
-    base = os.path.basename(role_guide_file).upper()
-    if base == "ROLE_BE.TXT":
-        return "Backend Engineer (BE)"
-    if base == "ROLE_FE.TXT":
-        return "Frontend Engineer (FE)"
-    if base == "ROLE_REVIEWER.TXT":
-        return "Code Reviewer"
-    if base == "ROLE_QA.TXT":
-        return "QA Lead"
-    if base == "ROLE_TECH_LEAD.TXT":
-        return "Tech Lead (Architecture / Delivery Lead)"
-    if base == "ROLE_PM.TXT":
-        return "Product Manager (PM)"
-    if base == "ROLE_DEVOPS.TXT":
-        return "DevOps / Platform Engineer"
-    if base == "ROLE_TECH_WRITER.TXT":
-        return "Technical Writer"
-    return "Unknown"
+def run_policy_checks(repo_root: str) -> int:
+    # Clean pycache first
+    try:
+        for p in Path(repo_root).rglob("__pycache__"):
+            if p.is_dir():
+                shutil.rmtree(p, ignore_errors=True)
+        for p in Path(repo_root).rglob("*.pyc"):
+            try:
+                p.unlink()
+            except Exception:
+                pass
+    except Exception:
+        pass
+    if check_ellipses_run(repo_root) != 0:
+        return die("FD_FAIL: policy ellipses", 1)
+    if check_lines_run(repo_root) != 0:
+        return die("FD_FAIL: policy line_limit", 1)
+    if check_ascii_run(repo_root) != 0:
+        return die("FD_FAIL: policy ascii", 1)
+    return 0
 
 def main() -> int:
-    if len(sys.argv) != 3:
-        sys.stdout.write("usage: run_wi_issue.py <ISSUE_NUMBER> <ROLE_GUIDE_FILE>\n")
-        return 2
-
+    if len(sys.argv) < 2:
+        return die("FD_FAIL: missing issue_number")
     issue_number = int(sys.argv[1])
-    role_guide_file = sys.argv[2]
+    role_guide_override = sys.argv[2] if len(sys.argv) > 2 else ""
 
-    gh_token = os.environ.get("GITHUB_TOKEN", "")
-    if gh_token == "":
-        die("FD_FAIL: missing GITHUB_TOKEN")
     api_key = os.environ.get("GEMINI_API_KEY", "")
     if api_key == "":
-        die("FD_FAIL: missing GEMINI_API_KEY")
+        return die("FD_FAIL: missing GEMINI_API_KEY")
+    token = os.environ.get("FD_BOT_TOKEN", "") or os.environ.get("GITHUB_TOKEN", "")
+    if token == "":
+        return die("FD_FAIL: missing GITHUB_TOKEN")
 
-    issue = get_issue(issue_number, gh_token)
+    issue = get_issue(issue_number, token)
     title = str(issue.get("title") or "")
     body = str(issue.get("body") or "")
-    ms_id = _ms_id(body)
 
-    guides_dir = Path("agent_guides")
-    global_txt = _read(guides_dir / "GLOBAL_CONSTRAINTS.txt")
-    output_mode = _read(guides_dir / "OUTPUT_MODE.txt")
-    role_txt = _read(guides_dir / role_guide_file)
+    role_guide = role_guide_override.strip() or role_guide_for_issue_body(body)
+    role_map = load_role_model_map()
+    role = _extract_field(body, "Receiver Role (Next step)") or "Engineer"
+    model = model_for_role(role_map, role)
+    base = endpoint_base()
 
-    prompt = global_txt + "\n\n" + output_mode + "\n\n" + role_txt + "\n\n" + "INPUT_ISSUE_TITLE\n" + title + "\n\n" + "INPUT_ISSUE_BODY\n" + body + "\n"
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    if run_policy_checks(repo_root) != 0:
+        return 1
 
-    role_name = _role_name_from_guide(role_guide_file)
-    model = get_model_for_role(role_name)
-    endpoint_base = get_endpoint_base()
-
-    out_text = call_gemini(api_key, prompt, timeout_s=240, model=model, endpoint_base=endpoint_base)
+    prompt = build_prompt(repo_root, body, role_guide)
+    out_text = call_gemini(api_key, prompt, model=model, endpoint_base=base, timeout_s=240)
     if out_text.strip() == "":
-        die("FD_FAIL: model returned empty output role=" + role_name + " model=" + model)
+        return die("FD_FAIL: model returned empty output", 1)
 
     manifest = load_manifest_from_text(out_text)
-    if manifest.work_item_id == "":
-        # best effort: infer from issue body
-        wid = _field(body, "Work Item ID:")
-        if wid != "":
-            manifest.work_item_id = wid
 
-    tmp = tempfile.mkdtemp()
-    try:
-        # Build work branch staging content from pipeline_base only.
-        staging = os.path.join(tmp, "staging")
-        os.makedirs(staging, exist_ok=True)
-        base = Path("pipeline_base")
-        if not base.exists():
-            die("FD_FAIL: missing pipeline_base")
-        shutil.copytree(str(base), staging, dirs_exist_ok=True)
+    stage = Path(tempfile.mkdtemp(prefix="fd_wi_stage_"))
+    # Use pipeline_base if exists, else empty stage
+    pipeline_base = Path(repo_root) / "pipeline_base"
+    if pipeline_base.exists():
+        shutil.copytree(pipeline_base, stage, dirs_exist_ok=True)
 
-        apply_manifest(manifest, staging)
+    apply_manifest(manifest, stage)
 
-        # Package staging as artifact.zip
-        assets_dir = os.path.join(tmp, "assets")
-        os.makedirs(assets_dir, exist_ok=True)
-        artifact_zip = os.path.join(assets_dir, "artifact.zip")
-        from src.fd_zip import zip_dir
-        zip_dir(staging, artifact_zip)
+    # Build artifact
+    artifacts_dir = Path(tempfile.mkdtemp(prefix="fd_wi_artifacts_"))
+    artifact_zip = artifacts_dir / "artifact.zip"
+    zip_dir(stage, artifact_zip)
 
-        manifest_path = os.path.join(assets_dir, "manifest.json")
-        Path(manifest_path).write_text(extract_manifest_json(out_text) + "\n", encoding="utf-8")
+    now = datetime.datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+    wi_id = _extract_field(body, "Work Item ID") or ("WI-" + str(issue_number))
+    rel_tag = "FD-" + wi_id + "-" + now
 
-        ver_path = os.path.join(assets_dir, "verification_report.txt")
-        Path(ver_path).write_text("FD_VERIFICATION\nISSUE=" + str(issue_number) + "\nMODEL=" + model + "\n", encoding="utf-8")
+    manifest_path = artifacts_dir / "manifest.json"
+    write_json(manifest_path, manifest)
+    log_path = artifacts_dir / "runner_log.txt"
+    write_text(log_path, "WI issue_number=" + str(issue_number) + "\nrole_guide=" + role_guide + "\nmodel=" + model + "\n")
+    report_path = artifacts_dir / "verification_report.txt"
+    write_text(report_path, "FD_WI_EXECUTED\nWI=" + wi_id + "\nISSUE=" + str(issue_number) + "\n")
 
-        tag = "FD-" + (manifest.work_item_id or ("WI-" + str(issue_number))) + "-" + role_name.replace(" ", "_") + "-" + datetime.datetime.utcnow().strftime("%Y%m%d-%H%M%S")
-        create_release_with_assets(tag, "FD WI execution", [(artifact_zip, "artifact.zip"), (manifest_path, "manifest.json"), (ver_path, "verification_report.txt")])
+    gh_release_create(rel_tag, "WI " + wi_id, [artifact_zip, manifest_path, log_path, report_path])
 
-        create_comment(issue_number, "FD_WI_DONE\nRELEASE=" + tag + "\n", gh_token)
-        close_issue(issue_number, gh_token)
+    create_comment(issue_number, "FD_WI_DONE\nRELEASE=" + rel_tag, token)
+    close_issue(issue_number, token)
 
-        sys.stdout.write("FD_OK: release_tag=" + tag + "\n")
-        return 0
-    finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+    # Dispatch next WI if possible (needs FD_BOT_TOKEN to avoid recursion limits)
+    if os.environ.get("FD_BOT_TOKEN", "") != "":
+        next_issue = pick_next_wi_issue_number(token)
+        if next_issue != 0:
+            dispatch_workflow("orchestrate_wi_issue.yml", "main", {"issue_number": str(next_issue), "role_guide": ""}, token)
+
+    return 0
 
 if __name__ == "__main__":
     raise SystemExit(main())

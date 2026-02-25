@@ -54,41 +54,27 @@ def safe_get(obj: Dict[str, Any], key: str, default: str = "") -> str:
 
 def close_issue(issue_number: int, token: str) -> Dict[str, Any]:
     url = _api_base() + "/issues/" + str(issue_number)
-    payload = {"state": "closed"}
-    data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(url, data=data, method="PATCH")
-    for k, v in _headers(token).items():
-        req.add_header(k, v)
-    req.add_header("Content-Type", "application/json")
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    payload = json.dumps({"state": "closed"}).encode("utf-8")
+    req = urllib.request.Request(url, headers=_headers(token), data=payload, method="PATCH")
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        data = resp.read().decode("utf-8")
+    return json.loads(data)
 
 
-def list_issues(token: str, state: str = "open", per_page: int = 100, page: int = 1) -> Any:
-    url = _api_base() + "/issues?state=" + state + "&per_page=" + str(per_page) + "&page=" + str(page)
-    req = urllib.request.Request(url, method="GET")
-    for k, v in _headers(token).items():
-        req.add_header(k, v)
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+def list_open_issues(token: str, per_page: int = 100) -> Any:
+    # Returns list of issues/pulls; caller must filter pull_request key if needed.
+    url = _api_base() + "/issues?state=open&per_page=" + str(per_page)
+    req = urllib.request.Request(url, headers=_headers(token), method="GET")
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        data = resp.read().decode("utf-8")
+    return json.loads(data)
 
 
-def list_comments(issue_number: int, token: str, per_page: int = 100, page: int = 1) -> Any:
-    url = _api_base() + "/issues/" + str(issue_number) + "/comments?per_page=" + str(per_page) + "&page=" + str(page)
-    req = urllib.request.Request(url, method="GET")
-    for k, v in _headers(token).items():
-        req.add_header(k, v)
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        return json.loads(resp.read().decode("utf-8"))
-
-
-def workflow_dispatch(workflow_file: str, ref: str, inputs: Dict[str, str], token: str) -> None:
+def dispatch_workflow(workflow_file: str, ref: str, inputs: Dict[str, str], token: str) -> None:
     url = _api_base() + "/actions/workflows/" + workflow_file + "/dispatches"
-    payload = {"ref": ref, "inputs": inputs}
-    data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(url, data=data, method="POST")
-    for k, v in _headers(token).items():
-        req.add_header(k, v)
-    req.add_header("Content-Type", "application/json")
-    with urllib.request.urlopen(req, timeout=60) as resp:
+    payload = json.dumps({"ref": ref, "inputs": inputs}).encode("utf-8")
+    h = _headers(token)
+    h["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, headers=h, data=payload, method="POST")
+    with urllib.request.urlopen(req, timeout=30) as resp:
         resp.read()

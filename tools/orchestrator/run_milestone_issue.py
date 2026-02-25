@@ -147,16 +147,43 @@ def main() -> int:
         notes = "FD milestone planning artifact for " + ms_id
         gh_release_create(tag, tag, notes, [manifest_path, zip_path, verification_path])
 
-        # Create WI issues from manifest file entries.
+        # Create WI issues from manifest file entries (breadth-first by Task Number).
+        wi_items = []
         for f in manifest.files:
             if not f.path.startswith("handoff/work_items/"):
                 continue
             if not f.path.endswith(".md"):
                 continue
-            wi_title = _wi_title_from_body(f.content)
+            tn = ""
+            wi_id = ""
+            for line in f.content.splitlines():
+                if line.startswith("Task Number:"):
+                    tn = line.split(":", 1)[1].strip()
+                elif line.startswith("Work Item ID:"):
+                    wi_id = line.split(":", 1)[1].strip()
+            def _task_key(task_num: str):
+                if task_num.strip() == "":
+                    return (999, [])
+                parts = []
+                for p in task_num.split("."):
+                    p = p.strip()
+                    if p == "":
+                        continue
+                    try:
+                        parts.append(int(p))
+                    except Exception:
+                        parts.append(999)
+                return (len(parts), parts)
+            wi_items.append((_task_key(tn), wi_id, f.content))
+
+        wi_items.sort(key=lambda x: (x[0], x[1]))
+
+        for item in wi_items:
+            wi_body = item[2]
+            wi_title = _wi_title_from_body(wi_body)
             if wi_title == "":
-                wi_title = os.path.basename(f.path)
-            created = create_issue(wi_title, f.content, gh_token)
+                wi_title = "Work Item"
+            created = create_issue(wi_title, wi_body, gh_token)
             wi_created += 1
             created_wi_links.append("#" + str(created.get("number")) + " " + str(created.get("html_url")))
 
@@ -169,49 +196,54 @@ def main() -> int:
         comment_lines.append("WI=" + l)
     create_comment(issue_number, "\n".join(comment_lines) + "\n", gh_token)
 
+    # Close milestone planning issue (planning completed)
+    close_issue(issue_number, gh_token)
+
+    # Dispatch first WI automatically in breadth-first order
+    bot_token = os.environ.get("FD_BOT_TOKEN", "")
+    if bot_token != "":
+        first_wi = 0
+        if len(created_wi_links) > 0:
+            # created_wi_links entries: "#<num> <url>"
+            try:
+                first_wi = int(created_wi_links[0].split()[0].lstrip("#"))
+            except Exception:
+                first_wi = 0
+        if first_wi != 0:
+            dispatch_workflow("orchestrate_wi_issue.yml", "main", {"issue_number": str(first_wi), "role_guide": ""}, bot_token)
+
     sys.stdout.write("FD_OK: release_tag=" + tag + " wi_created=" + str(wi_created) + "\n")
     return 0
 
 
 def _wi_title_from_body(body: str) -> str:
-    def _get_field(key: str) -> str:
-        for line in body.splitlines():
-            s = line.strip()
-            if s.lower().startswith(key.lower()):
-                return s.split(":", 1)[1].strip()
-        return ""
-
-    wi_id = _get_field("Work Item ID:")
-    task_num = _get_field("Task Number:")
-    title = _get_field("Title:")
-    recv = _get_field("Receiver Role (Next step):")
-
+    wi_id = ""
+    task_num = ""
+    title = ""
+    recv = ""
+    for line in body.splitlines():
+        if line.startswith("Work Item ID:"):
+            wi_id = line.split(":", 1)[1].strip()
+        elif line.startswith("Task Number:"):
+            task_num = line.split(":", 1)[1].strip()
+        elif line.startswith("Title:"):
+            title = line.split(":", 1)[1].strip()
+        elif line.startswith("Receiver Role (Next step):"):
+            recv = line.split(":", 1)[1].strip()
     parts = []
     if wi_id != "":
         parts.append(wi_id)
     if task_num != "":
         parts.append(task_num)
-
-    if title == "":
-        # Fallback: first heading
-        for line in body.splitlines():
-            s = line.strip()
-            if s.startswith("#"):
-                title = s.lstrip("#").strip()
-                break
-    if title == "":
-        title = "Untitled"
-
-    out = ""
-    if len(parts) > 0:
-        out = " ".join(parts) + " - " + title
-    else:
-        out = title
-
+    if title != "":
+        parts.append("-")
+        parts.append(title)
     if recv != "":
-        out += " -> " + recv
-    return out
-
+        parts.append("->")
+        parts.append(recv)
+    if len(parts) == 0:
+        return ""
+    return "Work Item: " + " ".join(parts)
 
 
 def _copy_tree(src: str, dst: str) -> None:
@@ -230,3 +262,78 @@ def _copy_tree(src: str, dst: str) -> None:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+
+def _extract_field(text: str, key: str) -> str:
+    for line in text.splitlines():
+        if line.startswith(key + ":"):
+            return line.split(":", 1)[1].strip()
+    return ""
+
+def build_wi_issue_title(wi_text: str) -> str:
+    wi_id = _extract_field(wi_text, "Work Item ID")
+    task_num = _extract_field(wi_text, "Task Number")
+    title = _extract_field(wi_text, "Title")
+    recv = _extract_field(wi_text, "Receiver Role (Next step)")
+    parts = []
+    if wi_id != "":
+        parts.append(wi_id)
+    if task_num != "":
+        parts.append(task_num)
+    if title != "":
+        parts.append("-")
+        parts.append(title)
+    if recv != "":
+        parts.append("->")
+        parts.append(recv)
+    if len(parts) == 0:
+        return "Work Item"
+    return " ".join(parts)
+
+def _task_depth(task_num: str) -> int:
+    if task_num.strip() == "":
+        return 999
+    return len([p for p in task_num.split(".") if p.strip() != ""])
+
+def _task_key(task_num: str):
+    if task_num.strip() == "":
+        return (999, [])
+    nums = []
+    for p in task_num.split("."):
+        p = p.strip()
+        if p == "":
+            continue
+        try:
+            nums.append(int(p))
+        except Exception:
+            nums.append(999)
+    return (_task_depth(task_num), nums)
+
+def _wi_sort_key(wi_text: str):
+    task_num = _extract_field(wi_text, "Task Number")
+    wi_id = _extract_field(wi_text, "Work Item ID")
+    return (_task_key(task_num), wi_id)
+
+def close_issue(issue_number: int, token: str):
+    import urllib.request, json
+    url = _api_base() + "/issues/" + str(issue_number)
+    req = urllib.request.Request(url, method="PATCH")
+    req.add_header("Authorization", "token " + token)
+    req.add_header("Accept", "application/vnd.github+json")
+    data = json.dumps({"state":"closed"}).encode("utf-8")
+    with urllib.request.urlopen(req, data=data, timeout=30) as resp:
+        resp.read()
+
+def dispatch_wi_issue(issue_number: int, token: str):
+    # Dispatch workflow orchestrate_wi_issue.yml
+    import urllib.request, json
+    url = _api_base() + "/actions/workflows/orchestrate_wi_issue.yml/dispatches"
+    req = urllib.request.Request(url, method="POST")
+    req.add_header("Authorization", "token " + token)
+    req.add_header("Accept", "application/vnd.github+json")
+    req.add_header("Content-Type", "application/json")
+    payload = {"ref":"main","inputs":{"issue_number":str(issue_number)}}
+    data = json.dumps(payload).encode("utf-8")
+    with urllib.request.urlopen(req, data=data, timeout=30) as resp:
+        resp.read()
