@@ -1,20 +1,18 @@
 name: fd-agent-run
 
 on:
-  issues:
-    types: [opened, edited, labeled]
   workflow_dispatch:
     inputs:
       pipeline_id:
-        description: "Pipeline id (example: P-20260225-001)"
+        description: "Pipeline id"
         required: true
         type: string
       work_item:
-        description: "Work Item ID (example: WI-002)"
+        description: "Work Item ID"
         required: true
         type: string
       role:
-        description: "Role id (example: tech_lead)"
+        description: "Role id"
         required: true
         type: string
       task:
@@ -22,13 +20,19 @@ on:
         required: true
         type: string
       next_role:
-        description: "Next role id (empty means pipeline complete)"
+        description: "Next role id"
         required: false
         type: string
       next_task:
-        description: "Next task for next role"
+        description: "Next task"
         required: false
         type: string
+
+  issues:
+    types:
+      - opened
+      - edited
+      - labeled
 
 permissions:
   contents: write
