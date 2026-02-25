@@ -45,3 +45,14 @@ python tools/agent_pipeline.py --input tools/example_issue_input.json --out evid
 - ZIP artifacts are uploaded to Actions artifacts with short retention and are not committed to git.
 - The workflow deletes ARTIFACTS.zip before committing to the pipeline branch.
 - evidence folders store small, textual summaries only.
+
+## Troubleshooting
+
+If you create an Issue and nothing happens:
+- Confirm GitHub Actions are enabled for the repository.
+- Confirm the workflow file exists on the default branch (usually main): .github/workflows/agent_run.yml
+- Confirm the Issue has label: agent-run
+- Confirm the Issue body is valid JSON and includes required keys:
+  pipeline_id, work_item, role, task
+- Check the Actions tab for a run named: fd-agent-run
+- If a run exists but failed, open logs and fix the reported error.

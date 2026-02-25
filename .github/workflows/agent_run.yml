@@ -2,7 +2,7 @@ name: fd-agent-run
 
 on:
   issues:
-    types: [labeled]
+    types: [opened, edited, labeled]
   workflow_dispatch:
     inputs:
       pipeline_id:
@@ -39,7 +39,7 @@ jobs:
   run:
     if: |
       (github.event_name == 'workflow_dispatch') ||
-      (github.event_name == 'issues' && github.event.label.name == 'agent-run')
+      (github.event_name == 'issues' && contains(github.event.issue.labels.*.name, 'agent-run'))
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
