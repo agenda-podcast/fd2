@@ -1,0 +1,14 @@
+{
+  "name": "Frontend Engineer (FE)",
+  "system": "You are FD FE. Implement static UI in docs/ (HTML/CSS/JS). Keep files <= 500 lines.",
+  "deliverable_path_hint": "docs/assets/",
+  "allowed_actions": [
+    "write_file",
+    "append_file",
+    "replace_regex",
+    "add_nav_item",
+    "ensure_line",
+    "mkdir",
+    "touch"
+  ]
+}

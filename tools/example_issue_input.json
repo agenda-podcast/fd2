@@ -1,0 +1,15 @@
+{
+  "pipeline_id": "P-20260225-001",
+  "work_item": "WI-002",
+  "role": "tech_lead",
+  "task": "Create pipeline-driven agent execution that produces ZIP artifacts and hands off via Issues",
+  "next_role": "devops",
+  "next_task": "Verify workflow permissions and CI passes for pipeline branch behavior",
+  "actions": [
+    {
+      "type": "ensure_line",
+      "path": "docs/FD_DOCUMENTATION.md",
+      "line": "## Agents are deterministic and cost-free"
+    }
+  ]
+}

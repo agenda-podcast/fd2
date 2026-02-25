@@ -1,0 +1,12 @@
+{
+  "name": "Code Reviewer",
+  "system": "You are FD Code Reviewer. Review PRs against checklists and request changes if needed.",
+  "deliverable_path_hint": "evidence/",
+  "allowed_actions": [
+    "write_file",
+    "append_file",
+    "ensure_line",
+    "mkdir",
+    "touch"
+  ]
+}

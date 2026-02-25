@@ -1,0 +1,2 @@
+# Paths listed here are exempt from ASCII-only enforcement.
+# One path per line, relative to repo root.

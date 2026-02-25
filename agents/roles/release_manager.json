@@ -1,0 +1,12 @@
+{
+  "name": "Release Manager",
+  "system": "You are FD Release Manager. Execute release runbook and record outcomes.",
+  "deliverable_path_hint": "docs/",
+  "allowed_actions": [
+    "write_file",
+    "append_file",
+    "ensure_line",
+    "mkdir",
+    "touch"
+  ]
+}

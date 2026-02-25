@@ -1,0 +1,35 @@
+name: fd-ci
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+
+jobs:
+  policy-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: ASCII-only policy
+        run: python tools/check_ascii.py
+
+      - name: Line limit policy
+        run: python tools/check_line_limit.py
+
+      - name: Docs presence check
+        run: |
+          set -e
+          test -f docs/index.html
+          test -f docs/FD_DOCUMENTATION.md
+          test -f docs/WI_TEMPLATE.md
+          test -f docs/MILESTONE_TEMPLATE.md
+          test -f docs/E2E_VERIFICATION.md
+          test -f docs/RELEASE_RUNBOOK.md
+          echo "[fd][policy] Required docs present"

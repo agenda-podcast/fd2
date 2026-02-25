@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FAVELLA DEVELOPMENT (FD) Docs</title>
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">FD Docs</div>
+    <div class="actions">
+      <button id="copyLinkBtn" class="btn" type="button" title="Copy page link">Copy link</button>
+      <button id="copyRawBtn" class="btn" type="button" title="Copy raw markdown">Copy raw</button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <nav class="sidebar">
+      <div class="sidebar-title">Navigation</div>
+      <ul id="navList" class="nav"></ul>
+      <div class="sidebar-footer">
+        <div class="hint">Offline-capable. No build required.</div>
+      </div>
+    </nav>
+
+    <main class="content">
+      <div id="pageTitle" class="page-title"></div>
+      <div id="pageMeta" class="page-meta"></div>
+      <article id="renderTarget" class="doc"></article>
+    </main>
+  </div>
+
+  <script src="assets/app.js"></script>
+</body>
+</html>

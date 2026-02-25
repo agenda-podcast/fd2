@@ -1,0 +1,4 @@
+# FD: do not commit workflow artifacts
+evidence/**/ARTIFACTS.zip
+evidence/**/OPENAI_RAW.json
+*.zip
