@@ -8,7 +8,7 @@ on:
         required: true
         default: "P-20260225-001"
       work_item:
-        description: "Work Item ID (example: WI-001)"
+        description: "Work Item ID  (example: WI-001)"
         required: true
         default: "WI-001"
       role:
