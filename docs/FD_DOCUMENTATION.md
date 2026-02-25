@@ -134,3 +134,22 @@ The orchestrator runs in GitHub Actions and:
 - Builds artifact.zip and publishes it to a GitHub Release.
 - Updates the pipeline branch with the artifact content (when artifact_type is pipeline_snapshot).
 
+### 11.1 Manual start from a Milestone Issue
+
+FD supports a manual start workflow that turns a Milestone Issue into a normalized v1 brief and a set of Work Item issues.
+
+Workflow:
+- .github/workflows/orchestrate_milestone.yml
+
+Inputs:
+- issue_number: the GitHub Issue number of a Milestone Issue with a title that starts with MS-
+- role_guide: ROLE_PM.txt
+
+Required secrets:
+- GEMINI_API_KEY
+
+Outputs:
+- A GitHub Release FD-MS-XX-PM-YYYYMMDD-HHMMSS
+- A comment on the Milestone Issue with the Release tag
+- Created Work Item issues based on files under handoff/work_items/
+

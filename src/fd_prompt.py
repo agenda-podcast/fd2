@@ -15,3 +15,15 @@ def build_prompt(agent_guides_dir: str, role_guide_file: str, wi_path: str) -> s
     parts.append(read_text(wi_path))
     parts.append("RETURN STRICT OUTPUT MODE ONLY.")
     return "\n\n".join(parts)
+
+
+def build_prompt_from_text(agent_guides_dir: str, role_guide_file: str, input_text: str) -> str:
+    parts: List[str] = []
+    parts.append(read_text(os.path.join(agent_guides_dir, "GLOBAL_CONSTRAINTS.txt")))
+    parts.append(read_text(os.path.join(agent_guides_dir, "ARTIFACT_CONTRACT.txt")))
+    parts.append(read_text(os.path.join(agent_guides_dir, "OUTPUT_MODE.txt")))
+    parts.append(read_text(os.path.join(agent_guides_dir, role_guide_file)))
+    parts.append("INPUT TEXT (EXECUTE THIS):")
+    parts.append(input_text)
+    parts.append("RETURN STRICT OUTPUT MODE ONLY.")
+    return "\n\n".join(parts)
