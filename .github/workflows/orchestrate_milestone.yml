@@ -30,16 +30,15 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Setup gh
-        uses: cli/cli@v2
-        with:
-          version: latest
-
-      - name: Authenticate gh
+      - name: Ensure gh installed
         run: |
-          echo "${GITHUB_TOKEN}" | gh auth login --with-token
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          if command -v gh >/dev/null 2>&1; then
+            gh --version
+            exit 0
+          fi
+          sudo apt-get update
+          sudo apt-get install -y gh
+          gh --version
 
       - name: Run milestone orchestrator
         run: |
@@ -47,3 +46,4 @@ jobs:
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
