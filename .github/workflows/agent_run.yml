@@ -7,26 +7,32 @@ on:
         description: "Pipeline id (example: P-20260225-001)"
         required: true
         default: "P-20260225-001"
+        type: string
       work_item:
         description: "Work Item ID (example: WI-001)"
         required: true
         default: "WI-001"
+        type: string
       role:
         description: "Role id (example: pm)"
         required: true
         default: "pm"
+        type: string
       task:
         description: "Task text"
         required: true
         default: "Define next step"
+        type: string
       next_role:
         description: "Next role id (empty means pipeline complete)"
         required: false
         default: "tech_lead"
+        type: string
       next_task:
         description: "Next task for next role"
         required: false
         default: "Define technical approach and WI decomposition"
+        type: string
 
   issues:
     types:
