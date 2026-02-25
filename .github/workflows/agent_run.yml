@@ -153,9 +153,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e
-          NS=$(python tools/next_step.py)
-          NR=$(python -c "import json;print(json.loads(\"$NS\")[\"next_role\"])" )
-          NT=$(python -c "import json;print(json.loads(\"$NS\")[\"next_task\"])" )
+          python tools/next_step.py > tools/next_step.json
+          NR=$(python -c "import json;print(json.load(open('tools/next_step.json'))['next_role'])")
+          NT=$(python -c "import json;print(json.load(open('tools/next_step.json'))['next_task'])")
           if [ -z "$NR" ]; then
             echo "[fd][agent] no next_role; pipeline complete"
             exit 0
@@ -163,17 +163,17 @@ jobs:
           PID=$(python -c "import json;print(json.load(open('tools/issue_input.json'))['pipeline_id'])")
           WI=$(python -c "import json;print(json.load(open('tools/issue_input.json'))['work_item'])")
           TITLE="$WI next: $NR"
-          BODY=$(python - <<'PY'
+          BODY=$(python - <<PY
 import json
-j=json.load(open("tools/issue_input.json"))
+j=json.load(open('tools/issue_input.json'))
 out={
-  "pipeline_id": j["pipeline_id"],
-  "work_item": j["work_item"],
-  "role": (j.get("next_role","") or "").strip(),
-  "task": (j.get("next_task","") or "").strip(),
-  "next_role": "",
-  "next_task": "",
-  "actions": []
+  'pipeline_id': j['pipeline_id'],
+  'work_item': j['work_item'],
+  'role': r'''${NR}''',
+  'task': r'''${NT}''',
+  'next_role': '',
+  'next_task': '',
+  'actions': []
 }
 print(json.dumps(out, indent=2))
 PY
@@ -186,8 +186,8 @@ PY
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e
-          NS=$(python tools/next_step.py)
-          NR=$(python -c "import json;print(json.loads(\"$NS\")[\"next_role\"])" )
+          python tools/next_step.py > tools/next_step.json
+          NR=$(python -c "import json;print(json.load(open('tools/next_step.json'))['next_role'])")
           if [ -n "$NR" ]; then
             echo "[fd][agent] pipeline not complete; PR not opened"
             exit 0
