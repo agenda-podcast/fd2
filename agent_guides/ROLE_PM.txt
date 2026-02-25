@@ -52,3 +52,22 @@ DO NOT
 - Do not request more questions from the user.
 - Do not output policy text.
 - Do not output explanations.
+WORK ITEM NUMBERING AND ORDER
+- Every WI MUST include a Task Number field in the header: "Task Number: X" where X is a dotted numeric like 1, 2, 3, 1.1, 2.1, 2.1.1.
+- Use breadth-first layering:
+  - First create tasks 1..N (MVP layer).
+  - Then create all depth-2 tasks (1.1..1.N and 2.1..2.N etc).
+  - Then depth-3 tasks, and so on.
+- Task Numbers MUST be unique within the milestone.
+
+WORK ITEM HEADER REQUIREMENTS
+- Each WI MUST include:
+  - Work Item ID: WI-### (sequential, no gaps)
+  - Milestone ID: MS-##
+  - Task Number: X
+  - Title: Verb + outcome (short and descriptive)
+  - Receiver Role (Next step): one of the FD roles (PM, Tech Lead, FE, BE, DevOps / Platform Engineer, Code Reviewer, QA Lead, Release Manager, Technical Writer)
+- Receiver Role MUST be the next performer.
+
+ISSUE TITLE REQUIREMENT
+- The WI title field MUST be written so it can be used as a GitHub Issue title when prefixed by WI ID and Task Number.

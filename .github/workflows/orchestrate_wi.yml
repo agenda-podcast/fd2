@@ -1,58 +1,60 @@
-name: Orchestrate Work Item (Issue -> Gemini -> Release)
+name: Orchestrate Work Item (Gemini -> Release -> Pipeline)
 
 on:
   workflow_dispatch:
     inputs:
-      issue_number:
-        description: GitHub Issue number for WI-### issue
+      wi_path:
+        description: Path to WI file in repo (main)
         required: true
+        default: backlog/work_items/WI-003-seed-pipeline-app.md
       role_guide:
-        description: Optional override. Role guide file under agent_guides/
-        required: false
-        default: ""
+        description: Role guide file under agent_guides/
+        required: true
+        default: ROLE_FE.txt
       artifact_type:
-        description: Optional override (repo_patch or pipeline_snapshot)
-        required: false
-        default: ""
-  issues:
-    types: [opened]
+        description: repo_patch or pipeline_snapshot
+        required: true
+        default: pipeline_snapshot
 
 permissions:
   contents: write
-  issues: write
 
 jobs:
   run:
     runs-on: ubuntu-latest
-    if: >
-      (github.event_name == 'workflow_dispatch')
-      || (github.event_name == 'issues'
-          && github.actor == 'github-actions'
-          && startsWith(github.event.issue.title, 'Work Item:'))
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
 
-      - name: Set up Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
-      - name: Disable Python bytecode
-        run: echo "PYTHONDONTWRITEBYTECODE=1" >> "$GITHUB_ENV"
+      - name: Clean Python bytecode
+        run: |
+          find . -type d -name __pycache__ -prune -exec rm -rf {} +
+          find . -type f -name "*.pyc" -delete
+
+      - name: Ensure gh installed
+        run: |
+          if command -v gh >/dev/null 2>&1; then
+            gh --version
+            exit 0
+          fi
+          sudo apt-get update
+          sudo apt-get install -y gh
+          gh --version
 
       - name: Run orchestrator
+        run: |
+          python3 tools/orchestrator/run_wi.py "${{ inputs.wi_path }}" "${{ inputs.role_guide }}" "${{ inputs.artifact_type }}"
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -e
-          if [ "${{ github.event_name }}" = "issues" ]; then
-            ISSUE_NUMBER="${{ github.event.issue.number }}"
-            ROLE_GUIDE=""
-            ARTIFACT_TYPE=""
-          else
-            ISSUE_NUMBER="${{ inputs.issue_number }}"
-            ROLE_GUIDE="${{ inputs.role_guide }}"
-            ARTIFACT_TYPE="${{ inputs.artifact_type }}"
-          fi
-          python3 tools/orchestrator/run_wi.py "${ISSUE_NUMBER}" "${ROLE_GUIDE}" "${ARTIFACT_TYPE}"
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

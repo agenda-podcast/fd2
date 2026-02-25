@@ -112,7 +112,8 @@ def main() -> int:
         stage = os.path.join(tmp, "stage")
         os.makedirs(stage, exist_ok=True)
 
-        # Stage contains only files produced by the agent (no repo snapshot).
+        # Stage is repo snapshot + injected handoff files, used only for artifact.zip.
+        _copy_tree(repo_root, stage)
         apply_manifest(manifest, stage)
         run_policy_checks(stage)
 
@@ -173,21 +174,44 @@ def main() -> int:
 
 
 def _wi_title_from_body(body: str) -> str:
-    for line in body.splitlines():
-        s = line.strip()
-        if s.lower().startswith("title:"):
-            return s.split(":", 1)[1].strip()
-        if s.lower().startswith("work item id:"):
-            # Keep reading for a Title line
-            continue
-        if s.lower().startswith("work item id"):
-            continue
-    # Fallback: use first heading
-    for line in body.splitlines():
-        s = line.strip()
-        if s.startswith("#"):
-            return s.lstrip("#").strip()
-    return ""
+    def _get_field(key: str) -> str:
+        for line in body.splitlines():
+            s = line.strip()
+            if s.lower().startswith(key.lower()):
+                return s.split(":", 1)[1].strip()
+        return ""
+
+    wi_id = _get_field("Work Item ID:")
+    task_num = _get_field("Task Number:")
+    title = _get_field("Title:")
+    recv = _get_field("Receiver Role (Next step):")
+
+    parts = []
+    if wi_id != "":
+        parts.append(wi_id)
+    if task_num != "":
+        parts.append(task_num)
+
+    if title == "":
+        # Fallback: first heading
+        for line in body.splitlines():
+            s = line.strip()
+            if s.startswith("#"):
+                title = s.lstrip("#").strip()
+                break
+    if title == "":
+        title = "Untitled"
+
+    out = ""
+    if len(parts) > 0:
+        out = " ".join(parts) + " - " + title
+    else:
+        out = title
+
+    if recv != "":
+        out += " -> " + recv
+    return out
+
 
 
 def _copy_tree(src: str, dst: str) -> None:

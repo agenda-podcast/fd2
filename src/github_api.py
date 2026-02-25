@@ -50,3 +50,45 @@ def safe_get(obj: Dict[str, Any], key: str, default: str = "") -> str:
     if v is None:
         return default
     return str(v)
+
+
+def close_issue(issue_number: int, token: str) -> Dict[str, Any]:
+    url = _api_base() + "/issues/" + str(issue_number)
+    payload = {"state": "closed"}
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(url, data=data, method="PATCH")
+    for k, v in _headers(token).items():
+        req.add_header(k, v)
+    req.add_header("Content-Type", "application/json")
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def list_issues(token: str, state: str = "open", per_page: int = 100, page: int = 1) -> Any:
+    url = _api_base() + "/issues?state=" + state + "&per_page=" + str(per_page) + "&page=" + str(page)
+    req = urllib.request.Request(url, method="GET")
+    for k, v in _headers(token).items():
+        req.add_header(k, v)
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def list_comments(issue_number: int, token: str, per_page: int = 100, page: int = 1) -> Any:
+    url = _api_base() + "/issues/" + str(issue_number) + "/comments?per_page=" + str(per_page) + "&page=" + str(page)
+    req = urllib.request.Request(url, method="GET")
+    for k, v in _headers(token).items():
+        req.add_header(k, v)
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def workflow_dispatch(workflow_file: str, ref: str, inputs: Dict[str, str], token: str) -> None:
+    url = _api_base() + "/actions/workflows/" + workflow_file + "/dispatches"
+    payload = {"ref": ref, "inputs": inputs}
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(url, data=data, method="POST")
+    for k, v in _headers(token).items():
+        req.add_header(k, v)
+    req.add_header("Content-Type", "application/json")
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        resp.read()
