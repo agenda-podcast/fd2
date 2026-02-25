@@ -53,7 +53,7 @@ jobs:
       (github.event_name == 'issues' && contains(github.event.issue.labels.*.name, 'agent-run'))
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout (main)
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -63,7 +63,7 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Build input payload
+      - name: Build input payload (write to /tmp)
         run: |
           set -e
           TMP=/tmp/fd_issue_input.json
@@ -90,12 +90,29 @@ jobs:
         run: |
           set -e
           pid=$(python -c "import json;print(json.load(open('/tmp/fd_issue_input.json'))['pipeline_id'])")
-          echo "pid=$pid" >> $GITHUB_OUTPUT
-          echo "branch=pipeline/$pid" >> $GITHUB_OUTPUT\1- name: Sync tools from main
-  run: |
-    set -e
-    git fetch origin main
-    git checkout origin/main -- tools
+          echo "pid=$pid" >> "$GITHUB_OUTPUT"
+          echo "branch=pipeline/$pid" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout or create pipeline branch
+        run: |
+          set -e
+          BR="${{ steps.br.outputs.branch }}"
+          git config user.name "fd-agent-bot"
+          git config user.email "fd-agent-bot@users.noreply.github.com"
+          git fetch origin main
+          if git show-ref --verify --quiet "refs/remotes/origin/$BR"; then
+            git checkout -b "$BR" "origin/$BR"
+          else
+            git checkout -b "$BR" "origin/main"
+          fi
+
+      - name: Sync tools from main into pipeline branch
+        run: |
+          set -e
+          git fetch origin main
+          git checkout origin/main -- tools || true
+          git checkout origin/main -- .github/workflows/agent_run.yml || true
+
       - name: Materialize issue_input.json into repo
         run: |
           set -e
@@ -145,10 +162,10 @@ jobs:
           rm -f tools/_artifact_release_url.txt || true
           rm -f tools/next_issue_body.json || true
 
-      - name: Commit artifacts to pipeline branch
+      - name: Commit artifacts and changes to pipeline branch
         run: |
           set -e
-          git add evidence tools/issue_input.json || true
+          git add tools evidence .github/workflows/agent_run.yml || true
           if [ -n "$(git status --porcelain)" ]; then
             WI=$(python -c "import json;print(json.load(open('/tmp/fd_issue_input.json'))['work_item'])")
             ROLE=$(python -c "import json;print(json.load(open('/tmp/fd_issue_input.json'))['role'])")
@@ -156,7 +173,7 @@ jobs:
             git push origin "${{ steps.br.outputs.branch }}"
           fi
 
-      - name: Comment back with artifact link and pipeline branch (issues only)
+      - name: Comment back with run link (issues only)
         if: ${{ github.event_name == 'issues' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
