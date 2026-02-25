@@ -33,6 +33,11 @@ on:
         required: false
         default: ""
         type: string
+      issue_number:
+        description: "Issue number to comment on (for workflow_dispatch runs)"
+        required: false
+        default: ""
+        type: string
 
   issues:
     types:
@@ -76,7 +81,8 @@ jobs:
             "task": "${{ inputs.task }}",
             "next_role": "${{ inputs.next_role }}",
             "next_task": "${{ inputs.next_task }}",
-            "actions": []
+            "actions": [],
+            "issue_number": "${{ inputs.issue_number }}"
           }
           JSON
           else
@@ -158,8 +164,7 @@ jobs:
           find evidence -type f -name "ARTIFACTS.zip" -print -delete || true
           rm -f tools/next_step.json || true
           rm -f tools/next_issue_body.json || true
-          rm -f tools/_artifact_release_url.txt || true
-
+          
       - name: Commit artifacts to pipeline branch
         run: |
           set -e
@@ -171,8 +176,7 @@ jobs:
             git push origin "${{ steps.br.outputs.branch }}"
           fi
 
-      - name: Comment back with artifact link and pipeline branch (issues only)
-        if: ${{ github.event_name == 'issues' }}
+      - name: Comment back with artifact link and pipeline branch
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -185,10 +189,15 @@ jobs:
           # If release URL file exists, include it; otherwise blank.
           REL_URL=""
           if [ -f tools/_artifact_release_url.txt ]; then REL_URL=$(cat tools/_artifact_release_url.txt); fi
-          gh issue comment "${{ github.event.issue.number }}" --body "Agent ran role=$ROLE work_item=$WI pipeline=$PID. Pipeline branch: $BR. Tangible ZIP (Release asset): $REL_URL . Run: $RUN_URL"
+          ISSUE_NUM=$(python -c "import json;v=(json.load(open('tools/issue_input.json')).get('issue_number') or '').strip();print(v)")
+          if [ -z "$ISSUE_NUM" ] && [ "${{ github.event_name }}" = "issues" ]; then ISSUE_NUM="${{ github.event.issue.number }}"; fi
+          if [ -n "$ISSUE_NUM" ]; then
+            gh issue comment "$ISSUE_NUM" --body "Agent ran role=$ROLE work_item=$WI pipeline=$PID. Pipeline branch: $BR. Tangible ZIP (Release asset): $REL_URL . Run: $RUN_URL"
+          else
+            echo "[fd][agent] no issue_number available; skipping comment"
+          fi
 
-      - name: Create next agent issue and auto-start next run (issues only)
-        if: ${{ github.event_name == 'issues' }}
+      - name: Create next agent issue and auto-start next run
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -231,6 +240,15 @@ jobs:
             -f role="$NR" \
             -f task="$NT" \
             -f next_role="" \
-            -f next_task=""
+            -f next_task="" \
+            -f issue_number="$NUM"
 
           echo "[fd][agent] created next issue=$URL and dispatched next role=$NR"
+
+
+- name: Final cleanup (non-git)
+  run: |
+    set -e
+    rm -f tools/_artifact_release_url.txt || true
+    rm -f tools/next_issue_body.json || true
+    rm -f tools/next_step.json || true
