@@ -22,7 +22,7 @@ def apply_manifest(manifest: ArtifactManifest, repo_root: str) -> None:
         _write_file(repo_root, fe)
 
 def _write_file(repo_root: str, fe: FileEntry) -> None:
-    if fe.path.strip() == "" or fe.path.startswith("../") or fe.path.startswith("..\"):
+    if fe.path.strip() == "" or fe.path.startswith("../") or fe.path.startswith("..\\"):
         raise ValueError("invalid path")
     full = os.path.join(repo_root, fe.path)
     os.makedirs(os.path.dirname(full), exist_ok=True)
