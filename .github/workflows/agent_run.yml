@@ -90,19 +90,12 @@ jobs:
           set -e
           pid=$(python -c "import json;print(json.load(open('/tmp/fd_issue_input.json'))['pipeline_id'])")
           echo "pid=$pid" >> $GITHUB_OUTPUT
-          echo "branch=pipeline/$pid" >> $GITHUB_OUTPUT
-
-      - name: Checkout or create pipeline branch
-        run: |
-          set -e
-          BR="${{ steps.br.outputs.branch }}"
-          git config user.name "fd-agent-bot"
-          git config user.email "fd-agent-bot@users.noreply.github.com"
-          if git show-ref --verify --quiet "refs/remotes/origin/$BR"; then
-            git checkout -b "$BR" "origin/$BR"
-          else
-            git checkout -b "$BR"
-          fi
+          echo "branch=pipeline/$pid" >> $GITHUB_OUTPUT\1
+- name: Sync pipeline branch with main
+  run: |
+    set -e
+    git fetch origin main
+    git merge --no-edit origin/main
 
       - name: Materialize issue_input.json into repo
         run: |
