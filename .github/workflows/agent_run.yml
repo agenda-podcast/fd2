@@ -121,6 +121,7 @@ jobs:
         run: |
           set -e
           find evidence -type f -name "ARTIFACTS.zip" -print -delete || true
+          rm -f tools/next_step.json || true
 
       - name: Commit artifacts to pipeline branch
         run: |
