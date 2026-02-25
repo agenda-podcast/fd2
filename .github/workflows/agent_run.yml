@@ -4,29 +4,29 @@ on:
   workflow_dispatch:
     inputs:
       pipeline_id:
-        description: "Pipeline id"
+        description: "Pipeline id (example: P-20260225-001)"
         required: true
-        type: string
+        default: "P-20260225-001"
       work_item:
-        description: "Work Item ID"
+        description: "Work Item ID (example: WI-001)"
         required: true
-        type: string
+        default: "WI-001"
       role:
-        description: "Role id"
+        description: "Role id (example: pm)"
         required: true
-        type: string
+        default: "pm"
       task:
         description: "Task text"
         required: true
-        type: string
+        default: "Define next step"
       next_role:
-        description: "Next role id"
+        description: "Next role id (empty means pipeline complete)"
         required: false
-        type: string
+        default: "tech_lead"
       next_task:
-        description: "Next task"
+        description: "Next task for next role"
         required: false
-        type: string
+        default: "Define technical approach and WI decomposition"
 
   issues:
     types:
@@ -42,7 +42,7 @@ permissions:
 jobs:
   run:
     if: |
-      (github.event_name == 'workflow_dispatch') ||
+      github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'issues' && contains(github.event.issue.labels.*.name, 'agent-run'))
     runs-on: ubuntu-latest
     steps:
@@ -73,7 +73,10 @@ jobs:
           }
           JSON
           else
-            python tools/parse_issue_json.py               --issue-number "${{ github.event.issue.number }}"               --issue-body "${{ github.event.issue.body }}"               --out tools/issue_input.json
+            python tools/parse_issue_json.py \
+              --issue-number "${{ github.event.issue.number }}" \
+              --issue-body "${{ github.event.issue.body }}" \
+              --out tools/issue_input.json
           fi
 
       - name: Determine pipeline branch
@@ -96,7 +99,7 @@ jobs:
             git checkout -b "$BR"
           fi
 
-      - name: Run agent pipeline (writes outputs + ZIP)
+      - name: Run agent pipeline
         run: |
           set -e
           WI=$(python -c "import json;print(json.load(open('tools/issue_input.json'))['work_item'])")
@@ -104,7 +107,6 @@ jobs:
           OUTDIR="evidence/${WI}/${ROLE}"
           mkdir -p "$OUTDIR"
           python tools/agent_pipeline.py --input tools/issue_input.json --out "$OUTDIR"
-          ls -la "$OUTDIR"
 
       - name: Upload agent artifacts (short retention)
         uses: actions/upload-artifact@v4
@@ -116,13 +118,12 @@ jobs:
             evidence/**/AGENT_OUTPUT.md
             evidence/**/AGENT_META.json
 
-- name: Cleanup ZIP artifacts before commit
-  run: |
-    set -e
-    find evidence -type f -name "ARTIFACTS.zip" -print -delete || true
-    echo "[fd][agent] cleaned ARTIFACTS.zip from workspace"
+      - name: Cleanup ZIP artifacts before commit
+        run: |
+          set -e
+          find evidence -type f -name "ARTIFACTS.zip" -print -delete || true
 
-      - name: Commit artifacts and changes to pipeline branch
+      - name: Commit artifacts to pipeline branch
         run: |
           set -e
           git add evidence tools/issue_input.json || true
@@ -131,54 +132,4 @@ jobs:
             ROLE=$(python -c "import json;print(json.load(open('tools/issue_input.json'))['role'])")
             git commit -m "$WI $ROLE artifacts"
             git push origin "${{ steps.br.outputs.branch }}"
-          else
-            echo "[fd][agent] no changes to commit"
           fi
-
-      - name: Create next agent issue (if next_role set)
-        if: ${{ github.event_name != 'workflow_dispatch' }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -e
-          nr=$(python -c "import json;print(json.load(open('tools/issue_input.json')).get('next_role','') or '')")
-          if [ -z "$nr" ]; then
-            echo "[fd][agent] no next_role; pipeline complete"
-            exit 0
-          fi
-          pid=$(python -c "import json;print(json.load(open('tools/issue_input.json'))['pipeline_id'])")
-          wi=$(python -c "import json;print(json.load(open('tools/issue_input.json'))['work_item'])")
-          nt=$(python -c "import json;print(json.load(open('tools/issue_input.json')).get('next_task','') or '')")
-          title="$wi next: $nr"
-          body=$(python - <<'PY'
-import json
-j=json.load(open("tools/issue_input.json"))
-out={
-  "pipeline_id": j["pipeline_id"],
-  "work_item": j["work_item"],
-  "role": j.get("next_role",""),
-  "task": j.get("next_task",""),
-  "next_role": "",
-  "next_task": "",
-  "actions": []
-}
-print(json.dumps(out, indent=2))
-PY
-)
-          gh issue create --title "$title" --body "$body" --label "agent-run"
-
-      - name: Open PR when pipeline complete (issues trigger only)
-        if: ${{ github.event_name != 'workflow_dispatch' }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -e
-          nr=$(python -c "import json;print(json.load(open('tools/issue_input.json')).get('next_role','') or '')")
-          if [ -n "$nr" ]; then
-            echo "[fd][agent] pipeline not complete; PR not opened"
-            exit 0
-          fi
-          pid=$(python -c "import json;print(json.load(open('tools/issue_input.json'))['pipeline_id'])")
-          wi=$(python -c "import json;print(json.load(open('tools/issue_input.json'))['work_item'])")
-          br="pipeline/$pid"
-          gh pr create --title "$wi pipeline complete ($pid)"             --body "Pipeline $pid complete. Branch: $br. Includes all accumulated artifacts and changes. CI must pass."             --base main --head "$br" || true
