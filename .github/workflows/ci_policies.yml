@@ -1,13 +1,6 @@
 name: FD Policy Checks
 
 on:
-  pull_request:
-    paths:
-      - '.github/workflows/**'
-      - 'tools/**'
-      - 'src/**'
-      - 'agent_guides/**'
-      - 'backlog/**'
   push:
     branches:
       - main
@@ -17,6 +10,7 @@ on:
       - 'src/**'
       - 'agent_guides/**'
       - 'backlog/**'
+      - 'docs/**'
 
 jobs:
   policy:
@@ -37,7 +31,9 @@ jobs:
 
       - name: Policy - ASCII
         run: python3 tools/check_ascii.py .
+
       - name: Policy - Line limits
         run: python3 tools/check_line_limits.py .
+
       - name: Policy - No ellipses
         run: python3 tools/check_no_ellipses.py .
