@@ -1,4 +1,7 @@
 import json
+
+from src.fd_patch_v1 import load_manifest_from_patch_text
+
 from dataclasses import dataclass
 from typing import List, Optional, Dict, Any
 
@@ -70,6 +73,8 @@ def load_manifest_from_text(text: str) -> ArtifactManifest:
         lines = t.splitlines()
         if len(lines) >= 3 and lines[0].startswith("```") and lines[-1].startswith("```"):
             t = "\n".join(lines[1:-1]).strip()
+    if t.startswith("FD_PATCH_V1"):
+        return load_manifest_from_patch_text(t)
     try:
         obj = json.loads(t)
     except json.JSONDecodeError:

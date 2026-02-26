@@ -82,11 +82,11 @@ def run_policy_checks(repo_root: str) -> int:
 
 def _write_attempt_artifacts(artifacts_dir: Path, attempt: int, prompt: str, model_out: str, err: str) -> None:
     p = artifacts_dir / ("attempt_" + str(attempt) + "_prompt.txt")
-    p.write_text(prompt, encoding="ascii", errors="ignore")
+    p.open("w", encoding="utf-8", errors="ignore").write(prompt)
     o = artifacts_dir / ("attempt_" + str(attempt) + "_model_output.txt")
-    o.write_text(model_out, encoding="ascii", errors="ignore")
+    o.open("w", encoding="utf-8", errors="ignore").write(model_out)
     e = artifacts_dir / ("attempt_" + str(attempt) + "_error.txt")
-    e.write_text(err, encoding="ascii", errors="ignore")
+    e.open("w", encoding="utf-8", errors="ignore").write(err)
 
 def _enforce_executable_gates(stage: Path) -> None:
     # Minimal deterministic gates to ensure output is runnable Python app.
@@ -289,6 +289,9 @@ def main() -> int:
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
     if run_policy_checks(repo_root) != 0:
         return 1
+
+    artifacts_dir = Path(tempfile.mkdtemp(prefix="fd_wi_artifacts_"))
+    print("FD_DEBUG: artifacts_dir=" + str(artifacts_dir))
 
     agent_guides_dir = os.path.join(repo_root, "agent_guides")
     base_prompt = build_prompt_from_text(agent_guides_dir, role_guide, body)

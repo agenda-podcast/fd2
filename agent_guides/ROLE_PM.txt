@@ -66,3 +66,7 @@ Write these files:
 - handoff/work_items/WI-002-review.md
 - handoff/work_items/WI-003-docs.md
 - handoff/work_items/WI-004-publish.md
+
+OUTPUT FORMAT
+- Output must start with FD_PATCH_V1 using FILE blocks.
+- Do not output JSON.

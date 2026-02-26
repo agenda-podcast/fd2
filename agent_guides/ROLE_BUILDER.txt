@@ -22,3 +22,4 @@ QUALITY GATES
 - The app must run with the commands in the WI.
 - Tests must pass.
 - No placeholders allowed.
+\n\nOUTPUT FORMAT\n- Output must start with FD_PATCH_V1 and use FILE blocks with <<< and >>>.\n- Do not output JSON.\n

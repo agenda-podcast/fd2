@@ -70,7 +70,7 @@ def call_gemini(api_key: str, prompt: str, timeout_s: int = 240, model: str | No
     def _make_payload(max_output_tokens: int, thinking_budget: int) -> dict:
         gen = {
             "temperature": 0.2,
-            "responseMimeType": "application/json",
+            "responseMimeType": os.environ.get("FD_GEMINI_RESPONSE_MIME", "text/plain"),
             "thinkingConfig": {
                 "includeThoughts": False,
                 "thinkingBudget": thinking_budget,
