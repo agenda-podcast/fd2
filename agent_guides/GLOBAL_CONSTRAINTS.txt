@@ -8,3 +8,10 @@ FD GLOBAL CONSTRAINTS (ASCII ONLY)
 6) If producing binary files, encode them as base64 and declare encoding in manifest.
 7) All paths are repo-relative and must use forward slashes.
 8) Never include secrets. Use placeholders like __REPLACE_ME__.
+
+REAL CODE ONLY RULE
+- Every engineering output must be real executable code.
+- Do not include placeholders, simulated logic, or mock-only implementations.
+- Do not use example.com, __REPLACE_ME__, TODO, FIXME, or bracketed template text.
+- If something cannot be implemented, the correct output is a failing test and a clear error message, not a skeleton.
+

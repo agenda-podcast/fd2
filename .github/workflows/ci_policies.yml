@@ -43,6 +43,9 @@ jobs:
       - name: Ensure no ellipses present
         run: python3 tools/check_no_ellipses.py .
 
+      - name: Reject placeholders and skeleton text
+        run: python3 tools/check_no_placeholders.py .
+
       - name: Validate workflow triggers
         run: python3 tools/check_workflow_triggers.py .
 

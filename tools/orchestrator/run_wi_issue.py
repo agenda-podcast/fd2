@@ -26,6 +26,7 @@ from tools.orchestrator.assemble_app_branch import assemble_stage_for_ms
 from tools.check_ascii import run as check_ascii_run
 from tools.check_line_limits import run as check_lines_run
 from tools.check_no_ellipses import run as check_ellipses_run
+from tools.check_no_placeholders import run as check_placeholders_run
 
 MAX_ATTEMPTS = 3
 
@@ -73,6 +74,8 @@ def run_policy_checks(repo_root: str) -> int:
         if check_lines_run(repo_root) != 0:
             return 1
         if check_ellipses_run(repo_root) != 0:
+            return 1
+        if check_placeholders_run(repo_root) != 0:
             return 1
     finally:
         os.chdir(cwd)
@@ -210,7 +213,9 @@ def _policy_enforcement_block(attempt: int, last_error: str) -> str:
         lines.append("Previous attempt failed with: " + last_error.strip())
     lines.append("You MUST output valid JSON ONLY (no code fences, no markdown).")
     lines.append("All file contents MUST be ASCII only (no emoji, no Unicode punctuation).")
-    lines.append("Do NOT use 'etc' anywhere in file contents.")
+    lines.append("Do NOT use three dots anywhere in file contents.
+Do NOT use placeholders like __REPLACE__ME__ or example dot com.
+Do NOT write stubbed or mocked code; implement real logic that runs.")
     lines.append("Keep each non-table logic/code file <= 500 lines.")
     lines.append("manifest.notes MUST be an empty string.")
     lines.append("If you need a bullet list, use '-' and ASCII characters only.")
