@@ -1,0 +1,29 @@
+name: [MANUAL] Dispatch Next Work Item (Queue)
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      issues: read
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      FD_BOT_TOKEN: ${{ secrets.FD_BOT_TOKEN }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Clean Python bytecode
+        run: |
+          find . -type d -name __pycache__ -prune -exec rm -rf {} +
+          find . -type f -name "*.pyc" -delete
+
+      - name: Dispatch next WI
+        run: python3 tools/orchestrator/dispatch_next_wi.py

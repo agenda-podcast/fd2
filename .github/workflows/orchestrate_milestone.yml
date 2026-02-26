@@ -1,4 +1,4 @@
-name: Orchestrate Milestone (Manual Start)
+name: [MANUAL] Orchestrate Milestone
 
 on:
   workflow_dispatch:
