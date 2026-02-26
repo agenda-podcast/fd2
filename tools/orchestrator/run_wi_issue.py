@@ -102,9 +102,19 @@ def _publish_app_branch(repo_root: str, stage: Path, branch_name: str) -> None:
     cwd = os.getcwd()
     os.chdir(repo_root)
     try:
+        token = os.environ.get("FD_BOT_TOKEN", "") or os.environ.get("GITHUB_TOKEN", "")
+        if token == "":
+            raise RuntimeError("FD_FAIL: missing token for push")
+        repo = os.environ.get("GITHUB_REPOSITORY", "")
+        if repo == "":
+            raise RuntimeError("FD_FAIL: missing GITHUB_REPOSITORY for push")
+        remote_url = "https://x-access-token:" + token + "@github.com/" + repo + ".git"
+
         subprocess.check_call(["git", "config", "user.email", "actions@github.com"])
         subprocess.check_call(["git", "config", "user.name", "github-actions"])
+        subprocess.check_call(["git", "remote", "set-url", "origin", remote_url])
         subprocess.check_call(["git", "checkout", "-B", branch_name])
+
         for entry in os.listdir(repo_root):
             if entry == ".git":
                 continue
@@ -116,6 +126,7 @@ def _publish_app_branch(repo_root: str, stage: Path, branch_name: str) -> None:
                     os.remove(p)
                 except Exception:
                     pass
+
         for entry in os.listdir(stage):
             src = stage / entry
             dst = Path(repo_root) / entry
@@ -123,8 +134,8 @@ def _publish_app_branch(repo_root: str, stage: Path, branch_name: str) -> None:
                 shutil.copytree(src, dst, dirs_exist_ok=True)
             else:
                 shutil.copy2(src, dst)
+
         subprocess.check_call(["git", "add", "-A"])
-        # Commit can be a no-op if nothing changed; allow it to proceed without failing.
         try:
             subprocess.check_call(["git", "commit", "-m", "Publish app snapshot"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception:
@@ -241,13 +252,16 @@ def main() -> int:
 
 # If this WI produces an app snapshot, ensure the app branch has its own CI workflow.
     if manifest.artifact_type == "pipeline_snapshot":
-        _write_app_workflow(stage)
+        if os.environ.get("FD_BOT_TOKEN", "") != "":
+            _write_app_workflow(stage)
+        else:
+            print("FD_WARN: skipping app_ci.yml creation because FD_BOT_TOKEN is not set")
 
     artifacts_dir = Path(tempfile.mkdtemp(prefix="fd_wi_artifacts_"))
     artifact_zip = artifacts_dir / "artifact.zip"
     zip_dir(stage, artifact_zip)
 
-    now = datetime.datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+    now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%S")
     # wi_id is computed earlier from issue body/title
     rel_tag = "FD-" + wi_id + "-" + now
 
