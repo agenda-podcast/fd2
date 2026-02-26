@@ -82,6 +82,38 @@ def run_policy_checks(repo_root: str) -> int:
         os.chdir(cwd)
     return 0
 
+
+def _write_attempt_artifacts(artifacts_dir: Path, attempt: int, prompt: str, model_out: str, err: str) -> None:
+    p = artifacts_dir / ("attempt_" + str(attempt) + "_prompt.txt")
+    p.write_text(prompt, encoding="ascii", errors="ignore")
+    o = artifacts_dir / ("attempt_" + str(attempt) + "_model_output.txt")
+    o.write_text(model_out, encoding="ascii", errors="ignore")
+    e = artifacts_dir / ("attempt_" + str(attempt) + "_error.txt")
+    e.write_text(err, encoding="ascii", errors="ignore")
+
+def _enforce_executable_gates(stage: Path) -> None:
+    # Minimal deterministic gates to ensure output is runnable Python app.
+    main_py = stage / "src" / "main.py"
+    if not main_py.exists():
+        raise RuntimeError("FD_FAIL: missing src/main.py")
+    tests_dir = stage / "tests"
+    if not tests_dir.exists():
+        raise RuntimeError("FD_FAIL: missing tests directory")
+    # Compile all python files
+    py_files = []
+    for dp, dn, fn in os.walk(stage):
+        if "__pycache__" in dn:
+            dn.remove("__pycache__")
+        for f in fn:
+            if f.endswith(".py"):
+                py_files.append(os.path.join(dp, f))
+    if py_files:
+        subprocess.check_call([sys.executable, "-m", "py_compile"] + py_files, cwd=str(stage))
+    # Run unit tests
+    subprocess.check_call([sys.executable, "-m", "unittest", "discover", "-s", "tests"], cwd=str(stage))
+    # Dry run must exist and exit 0
+    subprocess.check_call([sys.executable, "src/main.py", "--dry-run"], cwd=str(stage))
+
 def _slug(s: str) -> str:
     s = s.strip().lower()
     s = re.sub(r"[^a-z0-9]+", "-", s)
@@ -318,10 +350,15 @@ def main() -> int:
 
             try:
                 apply_manifest(manifest, stage)
+                # Enforce executable gates for engineering outputs.
+                if role == "BUILDER":
+                    _enforce_executable_gates(stage)
             except Exception as exc:
                 last_err = "FD_FAIL: apply_manifest failed: " + str(exc)
+                _write_attempt_artifacts(artifacts_dir, attempt, prompt, out_text, last_err)
                 continue
 
+            _write_attempt_artifacts(artifacts_dir, attempt, prompt, out_text, "")
             break
 
         if manifest is None or stage is None:
@@ -345,8 +382,6 @@ def main() -> int:
                     shutil.rmtree(wfdir, ignore_errors=True)
                 except Exception:
                     pass
-
-    artifacts_dir = Path(tempfile.mkdtemp(prefix="fd_wi_artifacts_"))
     artifact_zip = artifacts_dir / "artifact.zip"
     zip_dir(stage, artifact_zip)
 
