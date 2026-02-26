@@ -142,7 +142,7 @@ Workflow:
 - .github/workflows/orchestrate_milestone.yml
 
 Inputs:
-- issue_number: the GitHub Issue number of a Milestone Issue with a title that starts with MS-
+- issue_number: the GitHub Issue number of the Milestone Issue (auto-assigned by GitHub).
 - role_guide: ROLE_PM.txt
 
 Required secrets:

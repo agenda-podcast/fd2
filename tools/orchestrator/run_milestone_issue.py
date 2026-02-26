@@ -52,13 +52,33 @@ def run_policy_checks(repo_root: str) -> None:
         os.chdir(cwd)
 
 
-def _extract_ms_id(title: str) -> str:
+def _extract_ms_id_from_title(title: str) -> str:
     # Accept formats like "MS-01" followed by text, or "MS-001" followed by text.
     t = title.strip()
     if not t.startswith("MS-"):
         return ""
     parts = t.split()
     return parts[0]
+
+
+def _extract_ms_id_from_body(body: str) -> str:
+    # Preferred: a Milestone template line.
+    # Example: "Milestone ID: MS-000".
+    for line in (body or "").splitlines():
+        s = line.strip()
+        if not s.lower().startswith("milestone id:"):
+            continue
+        val = s.split(":", 1)[1].strip()
+        if val.startswith("MS-"):
+            return val.split()[0]
+    return ""
+
+
+def _extract_ms_id(title: str, body: str) -> str:
+    ms = _extract_ms_id_from_title(title)
+    if ms != "":
+        return ms
+    return _extract_ms_id_from_body(body)
 
 
 def main() -> int:
@@ -80,9 +100,9 @@ def main() -> int:
     issue = get_issue(issue_number, gh_token)
     title = str(issue.get("title", "")).strip()
     body = str(issue.get("body", "")).strip()
-    ms_id = _extract_ms_id(title)
+    ms_id = _extract_ms_id(title, body)
     if ms_id == "":
-        die("FD_FAIL: issue title must start with MS-")
+        die("FD_FAIL: cannot determine milestone id. Use title prefix 'MS-' or include 'Milestone ID: MS-###' in issue body")
 
     issue_text = "TITLE\n" + title + "\n\nBODY\n" + body + "\n"
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))

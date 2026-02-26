@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       issue_number:
-        description: "GitHub Issue number for the Milestone (title must start with MS-)"
+        description: "GitHub issue number for the Milestone Issue (auto-assigned by GitHub)."
         required: true
         default: "1"
       role_guide:

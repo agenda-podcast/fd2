@@ -14,8 +14,9 @@ Start here:
 
 FD supports a manual start button so that a Milestone Issue is enough to begin automated work.
 
-1) Create a GitHub Issue with a title that starts with the Milestone ID, for example:
-   MS-01 Ship Daily major news summary
+1) Create a GitHub Issue for the milestone.
+   Preferred: include the Milestone ID in the title (example: "MS-01 Ship Daily major news summary").
+   Alternative: include a body line "Milestone ID: MS-01".
 
 2) Put your idea in the Issue body. It can be incomplete.
    The PM agent will normalize it into an executable v1 brief and will create Work Item issues.
@@ -27,7 +28,7 @@ FD supports a manual start button so that a Milestone Issue is enough to begin a
    Actions -> Orchestrate Milestone (Manual Start)
 
 5) Provide input:
-   issue_number = the GitHub Issue number for MS-01
+   issue_number = the GitHub Issue number for MS-XX (auto-assigned by GitHub)
    role_guide = ROLE_PM.txt
 
 Outputs:
