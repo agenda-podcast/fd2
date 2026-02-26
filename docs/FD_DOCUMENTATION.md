@@ -145,6 +145,11 @@ Inputs:
 - issue_number: the GitHub Issue number of the Milestone Issue (auto-assigned by GitHub).
 - role_guide: ROLE_PM.txt
 
+Milestone ID derivation (deterministic):
+- If the issue title starts with "MS-###", use that prefix.
+- Else if the issue body contains a line "Milestone ID: MS-###", use that value.
+- Else default to "MS-01" (first user milestone; MS-000 is reserved for foundation).
+
 Required secrets:
 - GEMINI_API_KEY
 
