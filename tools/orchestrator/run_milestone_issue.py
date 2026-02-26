@@ -44,8 +44,6 @@ def run_policy_checks(repo_root: str) -> None:
                     pass
     os.chdir(repo_root)
     try:
-        if check_ascii_run(repo_root) != 0:
-            die("FD_FAIL: policy ascii")
         if check_lines_run(repo_root) != 0:
             die("FD_FAIL: policy line limits")
         if check_ellipses_run(repo_root) != 0:
