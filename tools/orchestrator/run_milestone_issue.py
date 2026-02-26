@@ -230,6 +230,10 @@ Type: Feature
 Priority: P1
 Target Environment: Docs
 
+Required Manifest:
+- artifact_type: repo_patch
+- files: must add docs under docs/howto/ (markdown) and/or docs/howto/index.html
+
 ## Intent and Scope
 
 Problem / Goal (2-3 lines):
@@ -270,6 +274,10 @@ Receiver Role (Next step): Owner
 Type: Feature
 Priority: P0
 Target Environment: main -> app branch
+
+Required Manifest:
+- artifact_type: pipeline_snapshot
+- files: must include full runnable app under pipeline_app/
 
 ## Intent and Scope
 

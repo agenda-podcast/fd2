@@ -49,7 +49,7 @@ _ROLE_TO_GUIDE = {
 }
 
 def role_guide_for_issue_body(body: str) -> str:
-    raw = _extract_field(body, "Receiver Role (Next step)")
+    raw = _extract_field(body, "Owner Role (Producer)") or _extract_field(body, "Receiver Role (Next step)")
     role = normalize_role_name(raw).strip().upper()
     return _ROLE_TO_GUIDE.get(role, "ROLE_BE.txt")
 
@@ -223,7 +223,13 @@ def main() -> int:
         # Include last_err only. Do not print full model output to avoid noise/secrets.
         return die("FD_FAIL: wi execution failed after " + str(MAX_ATTEMPTS) + " attempts: " + last_err, 1)
 
-    # If this WI produces an app snapshot, ensure the app branch has its own CI workflow.
+        # Enforce special WI behaviors deterministically.
+    if wi_id == "WI-AUTO-PUBLISH-APP":
+        if manifest.artifact_type != "pipeline_snapshot":
+            print("FD_WARN: overriding manifest.artifact_type to pipeline_snapshot for WI-AUTO-PUBLISH-APP")
+            manifest.artifact_type = "pipeline_snapshot"
+
+# If this WI produces an app snapshot, ensure the app branch has its own CI workflow.
     if manifest.artifact_type == "pipeline_snapshot":
         _write_app_workflow(stage)
 
