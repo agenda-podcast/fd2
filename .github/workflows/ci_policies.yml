@@ -1,4 +1,4 @@
-name: "FD CI Policies"
+name: FD CI Policies
 
 on:
   workflow_dispatch:

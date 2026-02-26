@@ -1,4 +1,4 @@
-name: "Run Work Item (Issue -> Gemini -> Release)"
+name: Run Work Item (Issue Gemini Release)
 on:
   workflow_dispatch:
     inputs:
