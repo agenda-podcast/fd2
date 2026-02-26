@@ -20,6 +20,9 @@ jobs:
           find . -type d -name __pycache__ -prune -exec rm -rf {} +
           find . -type f -name "*.pyc" -delete
 
+      - name: Policy - Workflow triggers
+        run: python3 tools/check_workflow_triggers.py .
+
       - name: Policy - ASCII
         run: python3 tools/check_ascii.py .
       - name: Policy - Line limits
