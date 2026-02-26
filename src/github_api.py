@@ -1,5 +1,6 @@
 import json
 import os
+import urllib.error
 import urllib.request
 from typing import Any, Dict, Optional
 
@@ -76,5 +77,17 @@ def dispatch_workflow(workflow_file: str, ref: str, inputs: Dict[str, str], toke
     h = _headers(token)
     h["Content-Type"] = "application/json"
     req = urllib.request.Request(url, headers=h, data=payload, method="POST")
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        resp.read()
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            resp.read()
+    except urllib.error.HTTPError as exc:
+        body = ""
+        try:
+            body = exc.read().decode("utf-8", errors="replace")
+        except Exception:
+            pass
+        raise RuntimeError(
+            "FD_FAIL: dispatch_workflow HTTP " + str(exc.code) + ": " + body
+        ) from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError("FD_FAIL: dispatch_workflow network error: " + str(exc.reason)) from exc
