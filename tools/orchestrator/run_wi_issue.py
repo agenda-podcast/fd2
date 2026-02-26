@@ -213,9 +213,9 @@ def _policy_enforcement_block(attempt: int, last_error: str) -> str:
         lines.append("Previous attempt failed with: " + last_error.strip())
     lines.append("You MUST output valid JSON ONLY (no code fences, no markdown).")
     lines.append("All file contents MUST be ASCII only (no emoji, no Unicode punctuation).")
-    lines.append("Do NOT use three dots anywhere in file contents.
-Do NOT use placeholders like __REPLACE__ME__ or example dot com.
-Do NOT write stubbed or mocked code; implement real logic that runs.")
+    lines.append("Do NOT use three dots anywhere in file contents.")
+    lines.append("Do NOT use placeholders like __REPLACE__ME__ or example dot com.")
+    lines.append("Do NOT write stubbed or mocked code; implement real logic that runs.")
     lines.append("Keep each non-table logic/code file <= 500 lines.")
     lines.append("manifest.notes MUST be an empty string.")
     lines.append("If you need a bullet list, use '-' and ASCII characters only.")
