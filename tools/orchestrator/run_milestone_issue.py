@@ -29,6 +29,22 @@ def die(msg: str) -> None:
     sys.stdout.write(msg + "\n")
     raise SystemExit(1)
 
+def _milestone_enforcement_block(attempt: int, last_err: str) -> str:
+    lines = []
+    lines.append("")
+    lines.append("FD_MILESTONE_POLICY_ENFORCEMENT")
+    lines.append("This is attempt " + str(attempt) + " of 3.")
+    if last_err.strip() != "":
+        lines.append("Previous attempt failed with: " + last_err.strip())
+    lines.append("Return valid JSON ONLY. No markdown. No code fences.")
+    lines.append("All JSON strings must be properly escaped. No trailing commas.")
+    lines.append("Keep the output small enough to fit model output limits.")
+    lines.append("Write exactly 5 files: milestone_v1.md and 4 WI files.")
+    lines.append("Each WI must include Work Item ID and Milestone ID fields.")
+    lines.append("END_FD_MILESTONE_POLICY_ENFORCEMENT")
+    lines.append("")
+    return "\n".join(lines)
+
 
 def run_policy_checks(repo_root: str) -> None:
     cwd = os.getcwd()
@@ -130,10 +146,28 @@ def main() -> int:
     role = role_from_guide_filename(role_guide_file)
     model = model_for_role(role, role_map)
     ep_base = endpoint_base(role_map)
-    out_text = call_gemini(api_key, prompt, timeout_s=240, model=model, endpoint_base=ep_base)
-    if (out_text or "").strip() == "":
-        die("FD_FAIL: model returned empty output role=" + role + " model=" + model)
-    manifest = load_manifest_from_text(out_text)
+    os.environ["FD_GEMINI_MAX_OUTPUT_TOKENS"] = "0"
+    os.environ["FD_GEMINI_THINKING_BUDGET"] = "0"
+    os.environ["FD_GEMINI_RETRIES"] = "2"
+    last_err = ""
+    out_text = ""
+    manifest = None
+    for attempt in range(1, 4):
+        p = prompt
+        if attempt > 1:
+            p = p + _milestone_enforcement_block(attempt, last_err)
+        out_text = call_gemini(api_key, p, timeout_s=600, model=model, endpoint_base=ep_base)
+        if (out_text or "").strip() == "":
+            last_err = "FD_FAIL: model returned empty output role=" + role + " model=" + model
+            continue
+        try:
+            manifest = load_manifest_from_text(out_text)
+            break
+        except Exception as exc:
+            last_err = "FD_FAIL: invalid manifest json: " + str(exc)
+            continue
+    if manifest is None:
+        die("FD_FAIL: milestone execution failed after 3 attempts: " + last_err)
 
     if manifest.work_item_id != ms_id:
         sys.stdout.write(
