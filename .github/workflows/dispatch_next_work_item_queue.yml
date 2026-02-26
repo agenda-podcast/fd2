@@ -1,4 +1,4 @@
-name: "Dispatch Next Work Item (Queue)"
+name: Dispatch Next Work Item (Queue)
 on:
   workflow_dispatch: {}
 
