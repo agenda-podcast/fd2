@@ -16,6 +16,7 @@ _GUIDE_TO_ROLE = {
     "ROLE_DEVOPS.txt": "DEVOPS",
     "ROLE_FE.txt": "FE",
     "ROLE_BE.txt": "BE",
+    "ROLE_BUILDER.txt": "BUILDER",
     "ROLE_REVIEWER.txt": "REVIEWER",
 }
 
@@ -57,6 +58,8 @@ def normalize_role_name(raw: str) -> str:
         return "DEVOPS"
     if u.startswith("FRONTEND") or u == "FE":
         return "FE"
+    if u.startswith("BUILDER") or u == "BUILDER" or "FULLSTACK" in u:
+        return "BUILDER"
     if u.startswith("BACKEND") or u == "BE":
         return "BE"
     if u.startswith("CODE REVIEW") or u.startswith("REVIEWER"):
@@ -72,6 +75,8 @@ def normalize_role_name(raw: str) -> str:
         return "DEVOPS"
     if "FRONTEND" in u:
         return "FE"
+    if "BUILDER" in u:
+        return "BUILDER"
     if "BACKEND" in u:
         return "BE"
     if "REVIEW" in u:
@@ -85,7 +90,7 @@ def model_for_role(role: str, role_map: dict) -> str:
     roles = role_map.get("roles", {})
     if r in roles and isinstance(roles[r], dict) and roles[r].get("model"):
         return str(roles[r]["model"])
-    if r in ("FE", "BE", "REVIEWER"):
+    if r in ("FE", "BE", "REVIEWER", "BUILDER"):
         return DEFAULT_CODE_MODEL
     return DEFAULT_ROLE_MODEL
 

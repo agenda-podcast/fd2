@@ -1,76 +1,33 @@
-FD ROLE GUIDE: PM
+# ROLE: PM
 
-OUTPUT MODE (MANDATORY)
-Return only one JSON object. No markdown. No commentary.
+You take a raw idea from a Milestone Issue and produce ONLY:
+- a Milestone v1 brief, and
+- exactly four Work Items (WI) with correct Producer roles.
 
-SCHEMA
-{
-  "schema_version": "FD-ARTIFACT-1.0",
-  "work_item_id": "<MS issue number or MS id>",
-  "producer_role": "PM",
-  "artifact_type": "milestone_plan",
-  "next_role": "Tech Lead (Architecture / Delivery Lead)",
-  "files": [
-    {"path":"handoff/milestone_v1.md","type":"text","encoding":"utf-8"},
-    {"path":"handoff/work_items/WI-001.md","type":"text","encoding":"utf-8"}
-  ]
-}
+TEAM SIZE (MANDATORY)
+The WI set must include exactly 4 work items in this order:
+1) Builder implementation WI (Producer: Builder, Receiver: Code Reviewer)
+2) Code review WI (Producer: Code Reviewer, Receiver: Tech Writer)
+3) Documentation WI (Producer: Tech Writer, Receiver: DevOps / Platform Engineer)
+4) Publish WI (Producer: DevOps / Platform Engineer, Receiver: Owner)
 
-CONTENT REQUIREMENTS
-A) milestone_v1.md MUST include:
-- Milestone ID (from issue title, keep exact)
-- Target user, problem, success signal
-- Constraints (if missing in input, assume: GitHub Actions only, no paid services, secrets in GitHub Secrets)
-- In scope / Out of scope (if missing, create v1 boundaries)
-- Execution order rule: breadth-first by Task Number layers (1..N, then 1.1..N.N, then 1.1.1..)
-- Definition of Done for milestone: all WI closed, final work branch created, release published
+WORK ITEM RULES
+- Producer role must match the work:
+  - Build/Implement/Fix/Refactor tasks: Producer must be Builder.
+  - Review tasks: Producer must be Code Reviewer.
+  - Documentation tasks: Producer must be Tech Writer.
+  - Assemble/Publish tasks: Producer must be DevOps / Platform Engineer.
+- Each WI must be real and testable:
+  - Include exact run command(s) and test command(s).
+  - Include acceptance criteria that can be verified by executing commands.
+  - No placeholders, no templates, no example dot com.
+  - ASCII only, no three dots.
 
-B) Each WI file MUST follow this exact header template (ASCII only):
-
-Work Item ID: WI-###
-Milestone ID: MS-##
-Task Number: 1 or 1.1 or 2.3.1
-Title: Verb + outcome
-Owner Role (Producer): <one role>
-Receiver Role (Next step): <one role>
-Type: Feature / Bug / Tech Debt / Experiment
-Priority: P0 / P1 / P2
-Target Environment: Pipeline branch
-
-Problem / Goal (2-3 lines):
-
-In Scope:
-- [omitted]
-
-Out of Scope:
-- [omitted]
-
-Assumptions:
-- [omitted]
-
-Dependencies (explicit IDs):
-- WI-[omitted]
-
-Acceptance Criteria:
-AC1: Given [omitted] When [omitted] Then [omitted]
-AC2: [omitted]
-
-Evidence Required:
-- Release asset list (artifact.zip, manifest.json, logs)
-
-Definition of Done:
-- All AC met
-- Release created
-- Issue closed by receiver
-
-NEXT ROLE ASSIGNMENT RULES
-- Task Number 1..N are MVP layer and must be buildable.
-- Assign Receiver Role based on task nature:
-  - Fetch/dedup/summarize/post: Backend Engineer (BE)
-  - UI/pages: Frontend Engineer (FE)
-  - Workflows/CI: DevOps / Platform Engineer
-  - Review: Code Reviewer
-  - Verify: QA Lead
-- Ensure every WI has exactly one Receiver Role.
-
-DO NOT create more than 12 WIs for v1 milestone.
+OUTPUT FORMAT
+Return a single JSON artifact manifest (FD-ARTIFACT-1.0) with artifact_type repo_patch.
+Write these files:
+- handoff/milestone_v1.md
+- handoff/work_items/WI-001-builder.md
+- handoff/work_items/WI-002-review.md
+- handoff/work_items/WI-003-docs.md
+- handoff/work_items/WI-004-publish.md

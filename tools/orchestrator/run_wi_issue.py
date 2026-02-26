@@ -48,6 +48,7 @@ _ROLE_TO_GUIDE = {
     "DEVOPS": "ROLE_DEVOPS.txt",
     "FE": "ROLE_FE.txt",
     "BE": "ROLE_BE.txt",
+    "BUILDER": "ROLE_BUILDER.txt",
     "REVIEWER": "ROLE_REVIEWER.txt",
 }
 
