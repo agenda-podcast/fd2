@@ -107,6 +107,18 @@ def main() -> int:
     issue_text = "TITLE\n" + title + "\n\nBODY\n" + body + "\n"
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
     prompt = build_prompt_from_text(os.path.join(repo_root, "agent_guides"), role_guide_file, issue_text)
+    # Milestone planning is a special run: we require a deterministic manifest that
+    # tags the output as the milestone id and produces a repo_patch handoff.
+    # The model sometimes outputs WI-style ids or a different artifact_type.
+    # We both (1) instruct explicitly and (2) enforce deterministically after parsing.
+    prompt = (
+        prompt
+        + "\n\nFD_MILESTONE_CONSTRAINTS\n"
+        + "- work_item_id MUST equal the milestone id: "
+        + ms_id
+        + "\n"
+        + "- artifact_type MUST equal repo_patch\n"
+    )
 
     role_map = load_role_model_map()
     role = role_from_guide_filename(role_guide_file)
@@ -118,9 +130,22 @@ def main() -> int:
     manifest = load_manifest_from_text(out_text)
 
     if manifest.work_item_id != ms_id:
-        die("FD_FAIL: work_item_id must equal milestone id expected=" + ms_id)
+        sys.stdout.write(
+            "FD_WARN: overriding manifest.work_item_id to milestone id expected="
+            + ms_id
+            + " got="
+            + str(manifest.work_item_id)
+            + "\n"
+        )
+        manifest.work_item_id = ms_id
+
     if manifest.artifact_type != "repo_patch":
-        die("FD_FAIL: artifact_type must be repo_patch")
+        sys.stdout.write(
+            "FD_WARN: overriding manifest.artifact_type to repo_patch expected=repo_patch got="
+            + str(manifest.artifact_type)
+            + "\n"
+        )
+        manifest.artifact_type = "repo_patch"
 
     ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%S")
     tag = "FD-" + ms_id + "-PM-" + ts
@@ -263,20 +288,6 @@ def _wi_title_from_body(body: str) -> str:
     if len(parts) == 0:
         return ""
     return "Work Item: " + " ".join(parts)
-
-
-def _copy_tree(src: str, dst: str) -> None:
-    for dirpath, dirnames, filenames in os.walk(src):
-        rel = os.path.relpath(dirpath, src)
-        out_dir = os.path.join(dst, rel) if rel != "." else dst
-        os.makedirs(out_dir, exist_ok=True)
-        for fn in filenames:
-            s = os.path.join(dirpath, fn)
-            d = os.path.join(out_dir, fn)
-            with open(s, "rb") as rf:
-                data = rf.read()
-            with open(d, "wb") as wf:
-                wf.write(data)
 
 
 if __name__ == "__main__":
