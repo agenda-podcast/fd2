@@ -102,28 +102,55 @@ def _publish_app_branch(repo_root: str, stage: Path, branch_name: str) -> None:
     cwd = os.getcwd()
     os.chdir(repo_root)
     try:
-        token = os.environ.get("FD_BOT_TOKEN", "") or os.environ.get("GITHUB_TOKEN", "")
+        bot = os.environ.get("FD_BOT_TOKEN", "")
+        gh = os.environ.get("GITHUB_TOKEN", "")
+        token = bot or gh
+        token_src = "FD_BOT_TOKEN" if bot != "" else "GITHUB_TOKEN"
+        repo = os.environ.get("GITHUB_REPOSITORY", "")
         if token == "":
             raise RuntimeError("FD_FAIL: missing token for push")
-        repo = os.environ.get("GITHUB_REPOSITORY", "")
         if repo == "":
             raise RuntimeError("FD_FAIL: missing GITHUB_REPOSITORY for push")
+
+        # Always use an explicit tokenized remote URL so we do not rely on checkout auth state.
         remote_url = "https://x-access-token:" + token + "@github.com/" + repo + ".git"
+
+        print("FD_DEBUG: app_branch_publish begin")
+        print("FD_DEBUG: app_branch_name=" + branch_name)
+        print("FD_DEBUG: token_source=" + token_src)
+        print("FD_DEBUG: token_present=" + ("1" if token != "" else "0"))
+        print("FD_DEBUG: repo=" + repo)
 
         subprocess.check_call(["git", "config", "user.email", "actions@github.com"])
         subprocess.check_call(["git", "config", "user.name", "github-actions"])
         subprocess.check_call(["git", "remote", "set-url", "origin", remote_url])
+
+        # Log remotes for troubleshooting (URL will include token; redact by printing scheme/host only).
+        try:
+            rv = subprocess.check_output(["git", "remote", "-v"], text=True).strip()
+            safe = []
+            for line in rv.splitlines():
+                if "x-access-token:" in line:
+                    # redact token
+                    safe.append(re.sub(r"x-access-token:[^@]+@", "x-access-token:REDACTED@", line))
+                else:
+                    safe.append(line)
+            print("FD_DEBUG: git_remote_v=" + " | ".join(safe))
+        except Exception:
+            print("FD_DEBUG: git_remote_v=unavailable")
+
         subprocess.check_call(["git", "checkout", "-B", branch_name])
 
+        # Replace working tree with stage snapshot.
         for entry in os.listdir(repo_root):
             if entry == ".git":
                 continue
-            p = os.path.join(repo_root, entry)
-            if os.path.isdir(p):
-                shutil.rmtree(p, ignore_errors=True)
+            pp = os.path.join(repo_root, entry)
+            if os.path.isdir(pp):
+                shutil.rmtree(pp, ignore_errors=True)
             else:
                 try:
-                    os.remove(p)
+                    os.remove(pp)
                 except Exception:
                     pass
 
@@ -140,7 +167,33 @@ def _publish_app_branch(repo_root: str, stage: Path, branch_name: str) -> None:
             subprocess.check_call(["git", "commit", "-m", "Publish app snapshot"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception:
             pass
-        subprocess.check_call(["git", "push", "-u", "origin", branch_name])
+
+        def _push() -> None:
+            subprocess.check_call(["git", "push", "-u", "origin", branch_name])
+
+        try:
+            _push()
+            print("FD_DEBUG: app_branch_publish push_ok")
+            return
+        except subprocess.CalledProcessError as exc:
+            print("FD_WARN: app_branch_publish push_failed rc=" + str(exc.returncode))
+            # If GitHub rejects workflow updates, retry without any workflows in app branch.
+            # This allows branch publication even when workflow permission is unavailable.
+            wf_dir = Path(repo_root) / ".github" / "workflows"
+            if wf_dir.exists():
+                print("FD_WARN: app_branch_publish removing_workflows_and_retry")
+                shutil.rmtree(wf_dir, ignore_errors=True)
+                (Path(repo_root) / ".github").mkdir(parents=True, exist_ok=True)
+                # Ensure .github stays tracked if needed
+                subprocess.check_call(["git", "add", "-A"])
+                try:
+                    subprocess.check_call(["git", "commit", "-m", "Remove workflows for app branch"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                except Exception:
+                    pass
+                _push()
+                print("FD_DEBUG: app_branch_publish push_ok_without_workflows")
+                return
+            raise
     finally:
         os.chdir(cwd)
 
@@ -255,7 +308,13 @@ def main() -> int:
         if os.environ.get("FD_BOT_TOKEN", "") != "":
             _write_app_workflow(stage)
         else:
-            print("FD_WARN: skipping app_ci.yml creation because FD_BOT_TOKEN is not set")
+            print("FD_WARN: skipping app workflow creation because FD_BOT_TOKEN is not set")
+            wfdir = stage / ".github" / "workflows"
+            if wfdir.exists():
+                try:
+                    shutil.rmtree(wfdir, ignore_errors=True)
+                except Exception:
+                    pass
 
     artifacts_dir = Path(tempfile.mkdtemp(prefix="fd_wi_artifacts_"))
     artifact_zip = artifacts_dir / "artifact.zip"
