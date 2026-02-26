@@ -78,12 +78,7 @@ def _extract_ms_id(title: str, body: str) -> str:
     ms = _extract_ms_id_from_title(title)
     if ms != "":
         return ms
-    ms = _extract_ms_id_from_body(body)
-    if ms != "":
-        return ms
-    # "Idea" issues may not include an MS- prefix. In that case, default to
-    # MS-01 as the first user milestone (MS-000 is reserved for foundation).
-    return "MS-01"
+    return _extract_ms_id_from_body(body)
 
 
 def main() -> int:
@@ -105,14 +100,21 @@ def main() -> int:
     issue = get_issue(issue_number, gh_token)
     title = str(issue.get("title", "")).strip()
     body = str(issue.get("body", "")).strip()
-    # Use the GitHub issue number to locate the issue text, then derive the
-    # Milestone ID. If the issue does not include an MS- prefix (common for an
-    # initial idea capture), we default deterministically to MS-01.
     ms_id = _extract_ms_id(title, body)
+    if ms_id == "":
+        die("FD_FAIL: cannot determine milestone id. Use title prefix 'MS-' or include 'Milestone ID: MS-###' in issue body")
 
     issue_text = "TITLE\n" + title + "\n\nBODY\n" + body + "\n"
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
     prompt = build_prompt_from_text(os.path.join(repo_root, "agent_guides"), role_guide_file, issue_text)
+    # Milestone planning is a special run type: it must always produce a repo_patch artifact
+    # containing only planning handoff docs (no pipeline snapshot). Enforce output constraints
+    # in the prompt to reduce invalid manifests.
+    prompt += "\n\nMILESTONE RUN OUTPUT REQUIREMENTS (MUST)\n"
+    prompt += "- work_item_id MUST equal the milestone id: " + ms_id + "\n"
+    prompt += "- artifact_type MUST be: repo_patch\n"
+    prompt += "- Produce handoff/work_items/*.md files as needed for the next steps.\n"
+    prompt += "- Do not output pipeline snapshots in milestone planning.\n"
 
     role_map = load_role_model_map()
     role = role_from_guide_filename(role_guide_file)
@@ -123,14 +125,14 @@ def main() -> int:
         die("FD_FAIL: model returned empty output role=" + role + " model=" + model)
     manifest = load_manifest_from_text(out_text)
 
-    # The milestone planning run is keyed by Milestone ID. Models sometimes
-    # emit a WI-* style id out of habit; enforce deterministic traceability by
-    # overriding to the derived milestone id instead of hard-failing.
+    # Deterministic normalization: models sometimes emit WI ids and pipeline artifact types.
+    # For milestone planning, we hard-set both fields to the required milestone values.
     if manifest.work_item_id != ms_id:
         sys.stdout.write("FD_WARN: overriding manifest.work_item_id to milestone id expected=" + ms_id + " got=" + manifest.work_item_id + "\n")
         manifest.work_item_id = ms_id
     if manifest.artifact_type != "repo_patch":
-        die("FD_FAIL: artifact_type must be repo_patch")
+        sys.stdout.write("FD_WARN: overriding manifest.artifact_type to repo_patch expected=repo_patch got=" + manifest.artifact_type + "\n")
+        manifest.artifact_type = "repo_patch"
 
     ts = datetime.datetime.utcnow().strftime("%Y%m%d-%H%M%S")
     tag = "FD-" + ms_id + "-PM-" + ts
@@ -273,6 +275,20 @@ def _wi_title_from_body(body: str) -> str:
     if len(parts) == 0:
         return ""
     return "Work Item: " + " ".join(parts)
+
+
+def _copy_tree(src: str, dst: str) -> None:
+    for dirpath, dirnames, filenames in os.walk(src):
+        rel = os.path.relpath(dirpath, src)
+        out_dir = os.path.join(dst, rel) if rel != "." else dst
+        os.makedirs(out_dir, exist_ok=True)
+        for fn in filenames:
+            s = os.path.join(dirpath, fn)
+            d = os.path.join(out_dir, fn)
+            with open(s, "rb") as rf:
+                data = rf.read()
+            with open(d, "wb") as wf:
+                wf.write(data)
 
 
 if __name__ == "__main__":
