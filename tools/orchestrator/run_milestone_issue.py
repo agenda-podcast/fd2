@@ -63,6 +63,12 @@ def _extract_ms_id_from_title(title: str) -> str:
     parts = t.split()
     return parts[0]
 
+def _extract_field(text: str, key: str) -> str:
+    for line in (text or "").splitlines():
+        if line.startswith(key + ":"):
+            return line.split(":", 1)[1].strip()
+    return ""
+
 
 def _extract_ms_id_from_body(body: str) -> str:
     # Preferred: a Milestone template line.
