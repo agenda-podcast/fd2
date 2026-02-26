@@ -168,6 +168,16 @@ def main() -> int:
     issue = get_issue(issue_number, token)
     body = str(issue.get("body") or "")
 
+    title = str(issue.get("title") or "")
+    wi_id = _extract_field(body, "Work Item ID")
+    if wi_id == "":
+        m = re.search(r"\bWI-[0-9]{3,}\b", title)
+        if m:
+            wi_id = m.group(0)
+    if wi_id == "":
+        wi_id = "WI-" + str(issue_number)
+
+
     role_guide = role_guide_override.strip() or role_guide_for_issue_body(body)
     role_map = load_role_model_map()
     raw_role = _extract_field(body, "Owner Role (Producer)") or _extract_field(body, "Receiver Role (Next step)") or "Engineer"
@@ -238,7 +248,7 @@ def main() -> int:
     zip_dir(stage, artifact_zip)
 
     now = datetime.datetime.utcnow().strftime("%Y%m%d-%H%M%S")
-    wi_id = _extract_field(body, "Work Item ID") or ("WI-" + str(issue_number))
+    # wi_id is computed earlier from issue body/title
     rel_tag = "FD-" + wi_id + "-" + now
 
     manifest_path = artifacts_dir / "manifest.json"
@@ -270,7 +280,13 @@ def main() -> int:
 
     # Publish app branch if requested.
     if manifest.artifact_type == "pipeline_snapshot":
-        ms_id = _extract_field(body, "Milestone ID") or "MS-01"
+        ms_id = _extract_field(body, "Milestone ID")
+        if ms_id == "":
+            m = re.search(r"MS-[0-9]+", title)
+            if m:
+                ms_id = m.group(0)
+        if ms_id == "":
+            ms_id = "MS-01"
         branch_name = "app-" + _slug(ms_id)
         try:
             _publish_app_branch(repo_root, stage, branch_name)
