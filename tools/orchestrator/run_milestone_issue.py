@@ -19,7 +19,6 @@ from src.fd_zip import zip_dir
 from src.fd_release import write_json, write_text, gh_release_create
 from src.github_api import get_issue, create_issue, create_comment, close_issue, dispatch_workflow
 
-from tools.check_ascii import run as check_ascii_run
 from tools.check_line_limits import run as check_lines_run
 from tools.check_no_ellipses import run as check_ellipses_run
 import re

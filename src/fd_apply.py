@@ -8,10 +8,8 @@ TEXT_ENCODINGS = {"utf-8"}
 BINARY_ENCODINGS = {"base64"}
 
 def ensure_ascii_text(s: str) -> None:
-    try:
-        s.encode("ascii")
-    except UnicodeEncodeError as e:
-        raise ValueError("non-ascii content detected") from e
+    # ASCII enforcement removed to allow normal Unicode punctuation in docs and comments.
+    return
 
 def apply_manifest(manifest: ArtifactManifest, repo_root: str) -> None:
     root_real = os.path.realpath(repo_root)

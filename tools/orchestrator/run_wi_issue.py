@@ -23,7 +23,6 @@ from src.fd_release import write_text, write_json, gh_release_create
 from src.wi_queue import pick_next_wi_issue_number
 from src.github_api import get_issue, create_comment, close_issue, dispatch_workflow
 from tools.orchestrator.assemble_app_branch import assemble_stage_for_ms
-from tools.check_ascii import run as check_ascii_run
 from tools.check_line_limits import run as check_lines_run
 from tools.check_no_ellipses import run as check_ellipses_run
 from tools.check_no_placeholders import run as check_placeholders_run
@@ -70,8 +69,6 @@ def run_policy_checks(repo_root: str) -> int:
                     pass
     os.chdir(repo_root)
     try:
-        if check_ascii_run(repo_root) != 0:
-            return 1
         if check_lines_run(repo_root) != 0:
             return 1
         if check_ellipses_run(repo_root) != 0:

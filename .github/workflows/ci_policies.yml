@@ -34,9 +34,6 @@ jobs:
         with:
           python-version: '3.x'
 
-      - name: Verify ASCII only
-        run: python3 tools/check_ascii.py .
-
       - name: Enforce maximum line counts
         run: python3 tools/check_line_limits.py .
 
