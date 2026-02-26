@@ -25,6 +25,8 @@ from tools.check_ascii import run as check_ascii_run
 from tools.check_line_limits import run as check_lines_run
 from tools.check_no_ellipses import run as check_ellipses_run
 
+MAX_ATTEMPTS = 3
+
 def die(msg: str, code: int = 2) -> int:
     print(msg)
     return code
@@ -83,28 +85,26 @@ def _slug(s: str) -> str:
 def _write_app_workflow(stage_root: Path) -> None:
     wf_dir = stage_root / ".github" / "workflows"
     wf_dir.mkdir(parents=True, exist_ok=True)
-    # App branch is allowed to have push triggers; FD policy checks only gate main.
-    wf = """name: \"App CI\"\n\n""" + \
-         "on:\n  push: {}\n\n" + \
-         "jobs:\n  smoke:\n    runs-on: ubuntu-latest\n    steps:\n" + \
-         "      - uses: actions/checkout@v4\n" + \
-         "      - uses: actions/setup-node@v4\n        with:\n          node-version: '20'\n" + \
-         "      - name: Start server and smoke test\n        run: |\n" + \
-         "          node pipeline_app/server.js &\n" + \
-         "          sleep 2\n" + \
-         "          curl -fsS http://127.0.0.1:8080/ > /dev/null\n"
+    wf = (
+        "name: \"App CI\"\n\n"
+        "on:\n  push: {}\n\n"
+        "jobs:\n  smoke:\n    runs-on: ubuntu-latest\n    steps:\n"
+        "      - uses: actions/checkout@v4\n"
+        "      - uses: actions/setup-node@v4\n        with:\n          node-version: '20'\n"
+        "      - name: Start server and smoke test\n        run: |\n"
+        "          node pipeline_app/server.js &\n"
+        "          sleep 2\n"
+        "          curl -fsS http://127.0.0.1:8080/ > /dev/null\n"
+    )
     (wf_dir / "app_ci.yml").write_text(wf, encoding="utf-8")
 
 def _publish_app_branch(repo_root: str, stage: Path, branch_name: str) -> None:
-    # This runs inside GitHub Actions with a checkout already present.
-    # We replace the working tree contents with stage contents and push a branch.
     cwd = os.getcwd()
     os.chdir(repo_root)
     try:
         subprocess.check_call(["git", "config", "user.email", "actions@github.com"])
         subprocess.check_call(["git", "config", "user.name", "github-actions"])
         subprocess.check_call(["git", "checkout", "-B", branch_name])
-        # Remove everything except .git
         for entry in os.listdir(repo_root):
             if entry == ".git":
                 continue
@@ -116,7 +116,6 @@ def _publish_app_branch(repo_root: str, stage: Path, branch_name: str) -> None:
                     os.remove(p)
                 except Exception:
                     pass
-        # Copy stage into repo root
         for entry in os.listdir(stage):
             src = stage / entry
             dst = Path(repo_root) / entry
@@ -125,10 +124,33 @@ def _publish_app_branch(repo_root: str, stage: Path, branch_name: str) -> None:
             else:
                 shutil.copy2(src, dst)
         subprocess.check_call(["git", "add", "-A"])
-        subprocess.check_call(["git", "commit", "-m", "Publish app snapshot"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # Commit can be a no-op if nothing changed; allow it to proceed without failing.
+        try:
+            subprocess.check_call(["git", "commit", "-m", "Publish app snapshot"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
         subprocess.check_call(["git", "push", "-u", "origin", branch_name])
     finally:
         os.chdir(cwd)
+
+def _policy_enforcement_block(attempt: int, last_error: str) -> str:
+    # ASCII-only and no ellipses are hard repository rules.
+    # If an attempt fails, we add explicit constraints to force compliance.
+    lines = []
+    lines.append("")
+    lines.append("FD_POLICY_ENFORCEMENT")
+    lines.append("This is attempt " + str(attempt) + " of " + str(MAX_ATTEMPTS) + ".")
+    if last_error.strip() != "":
+        lines.append("Previous attempt failed with: " + last_error.strip())
+    lines.append("You MUST output valid JSON ONLY (no code fences, no markdown).")
+    lines.append("All file contents MUST be ASCII only (no emoji, no Unicode punctuation).")
+    lines.append("Do NOT use 'etc' anywhere in file contents.")
+    lines.append("Keep each non-table logic/code file <= 500 lines.")
+    lines.append("manifest.notes MUST be an empty string.")
+    lines.append("If you need a bullet list, use '-' and ASCII characters only.")
+    lines.append("END_FD_POLICY_ENFORCEMENT")
+    lines.append("")
+    return "\n".join(lines)
 
 def main() -> int:
     if len(sys.argv) < 2:
@@ -158,19 +180,48 @@ def main() -> int:
         return 1
 
     agent_guides_dir = os.path.join(repo_root, "agent_guides")
-    prompt = build_prompt_from_text(agent_guides_dir, role_guide, body)
-    out_text = call_gemini(api_key, prompt, model=model, endpoint_base=base, timeout_s=240)
-    if out_text.strip() == "":
-        return die("FD_FAIL: model returned empty output", 1)
+    base_prompt = build_prompt_from_text(agent_guides_dir, role_guide, body)
 
-    manifest = load_manifest_from_text(out_text)
+    last_err = ""
+    last_out = ""
+    manifest = None
+    stage = None
 
-    stage = Path(tempfile.mkdtemp(prefix="fd_wi_stage_"))
-    pipeline_base = Path(repo_root) / "pipeline_base" / "pipeline_app"
-    if pipeline_base.exists():
-        shutil.copytree(pipeline_base, stage / "pipeline_app", dirs_exist_ok=True)
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        prompt = base_prompt
+        if attempt > 1:
+            prompt = prompt + _policy_enforcement_block(attempt, last_err)
 
-    apply_manifest(manifest, stage)
+        out_text = call_gemini(api_key, prompt, model=model, endpoint_base=base, timeout_s=240)
+        last_out = out_text
+        if out_text.strip() == "":
+            last_err = "FD_FAIL: model returned empty output"
+            continue
+
+        try:
+            manifest = load_manifest_from_text(out_text)
+        except Exception as exc:
+            last_err = "FD_FAIL: invalid manifest: " + str(exc)
+            continue
+
+        stage = Path(tempfile.mkdtemp(prefix="fd_wi_stage_"))
+        pipeline_base = Path(repo_root) / "pipeline_base" / "pipeline_app"
+        if pipeline_base.exists():
+            shutil.copytree(pipeline_base, stage / "pipeline_app", dirs_exist_ok=True)
+
+        try:
+            apply_manifest(manifest, stage)
+        except Exception as exc:
+            # Common cases: non-ascii content detected, path violations, etc
+            last_err = "FD_FAIL: apply_manifest failed: " + str(exc)
+            continue
+
+        # Success
+        break
+
+    if manifest is None or stage is None:
+        # Include last_err only. Do not print full model output to avoid noise/secrets.
+        return die("FD_FAIL: wi execution failed after " + str(MAX_ATTEMPTS) + " attempts: " + last_err, 1)
 
     # If this WI produces an app snapshot, ensure the app branch has its own CI workflow.
     if manifest.artifact_type == "pipeline_snapshot":
