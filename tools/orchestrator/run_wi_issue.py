@@ -114,7 +114,6 @@ def _publish_app_branch(repo_root: str, stage: Path, branch_name: str) -> None:
         if repo == "":
             raise RuntimeError("FD_FAIL: missing GITHUB_REPOSITORY for push")
 
-        # Always use an explicit tokenized remote URL so we do not rely on checkout auth state.
         remote_url = "https://x-access-token:" + token + "@github.com/" + repo + ".git"
 
         print("FD_DEBUG: app_branch_publish begin")
@@ -127,13 +126,11 @@ def _publish_app_branch(repo_root: str, stage: Path, branch_name: str) -> None:
         subprocess.check_call(["git", "config", "user.name", "github-actions"])
         subprocess.check_call(["git", "remote", "set-url", "origin", remote_url])
 
-        # Log remotes for troubleshooting (URL will include token; redact by printing scheme/host only).
         try:
             rv = subprocess.check_output(["git", "remote", "-v"], text=True).strip()
             safe = []
             for line in rv.splitlines():
                 if "x-access-token:" in line:
-                    # redact token
                     safe.append(re.sub(r"x-access-token:[^@]+@", "x-access-token:REDACTED@", line))
                 else:
                     safe.append(line)
@@ -141,9 +138,15 @@ def _publish_app_branch(repo_root: str, stage: Path, branch_name: str) -> None:
         except Exception:
             print("FD_DEBUG: git_remote_v=unavailable")
 
+        # Ensure we have the latest remote state to avoid non-fast-forward failures.
+        try:
+            subprocess.check_call(["git", "fetch", "origin", branch_name])
+            print("FD_DEBUG: git_fetch_branch=ok")
+        except Exception:
+            print("FD_DEBUG: git_fetch_branch=missing_or_failed")
+
         subprocess.check_call(["git", "checkout", "-B", branch_name])
 
-        # Replace working tree with stage snapshot.
         for entry in os.listdir(repo_root):
             if entry == ".git":
                 continue
@@ -170,29 +173,26 @@ def _publish_app_branch(repo_root: str, stage: Path, branch_name: str) -> None:
         except Exception:
             pass
 
-        def _push() -> None:
-            subprocess.check_call(["git", "push", "-u", "origin", branch_name])
+        def _push_force_with_lease() -> None:
+            subprocess.check_call(["git", "push", "-u", "origin", branch_name, "--force-with-lease"])
 
         try:
-            _push()
+            _push_force_with_lease()
             print("FD_DEBUG: app_branch_publish push_ok")
             return
         except subprocess.CalledProcessError as exc:
             print("FD_WARN: app_branch_publish push_failed rc=" + str(exc.returncode))
-            # If GitHub rejects workflow updates, retry without any workflows in app branch.
-            # This allows branch publication even when workflow permission is unavailable.
             wf_dir = Path(repo_root) / ".github" / "workflows"
             if wf_dir.exists():
                 print("FD_WARN: app_branch_publish removing_workflows_and_retry")
                 shutil.rmtree(wf_dir, ignore_errors=True)
                 (Path(repo_root) / ".github").mkdir(parents=True, exist_ok=True)
-                # Ensure .github stays tracked if needed
                 subprocess.check_call(["git", "add", "-A"])
                 try:
                     subprocess.check_call(["git", "commit", "-m", "Remove workflows for app branch"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 except Exception:
                     pass
-                _push()
+                _push_force_with_lease()
                 print("FD_DEBUG: app_branch_publish push_ok_without_workflows")
                 return
             raise
