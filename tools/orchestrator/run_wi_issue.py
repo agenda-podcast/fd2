@@ -6,6 +6,7 @@ import tempfile
 import datetime
 import subprocess
 import re
+import json
 from pathlib import Path
 
 sys.dont_write_bytecode = True
@@ -21,6 +22,7 @@ from src.fd_zip import zip_dir
 from src.fd_release import write_text, write_json, gh_release_create
 from src.wi_queue import pick_next_wi_issue_number
 from src.github_api import get_issue, create_comment, close_issue, dispatch_workflow
+from tools.orchestrator.assemble_app_branch import assemble_stage_for_ms
 from tools.check_ascii import run as check_ascii_run
 from tools.check_line_limits import run as check_lines_run
 from tools.check_no_ellipses import run as check_ellipses_run
@@ -256,46 +258,68 @@ def main() -> int:
     agent_guides_dir = os.path.join(repo_root, "agent_guides")
     base_prompt = build_prompt_from_text(agent_guides_dir, role_guide, body)
 
-    last_err = ""
-    last_out = ""
-    manifest = None
-    stage = None
+    # Deterministic publish WI: assemble from prior releases, do not call Gemini.
+    if wi_id == "WI-AUTO-PUBLISH-APP":
+        ms_id = _extract_field(body, "Milestone ID")
+        if ms_id == "":
+            mms = re.search(r"MS-[0-9]+", title)
+            if mms:
+                ms_id = mms.group(0)
+        if ms_id == "":
+            ms_id = "MS-01"
+        print("FD_DEBUG: publish_wi assemble ms_id=" + ms_id)
+        stage = assemble_stage_for_ms(ms_id, token, Path(repo_root))
+        manifest = load_manifest_from_text(json.dumps({
+            "schema_version": "FD-ARTIFACT-1.0",
+            "work_item_id": wi_id,
+            "producer_role": "DevOps",
+            "artifact_type": "pipeline_snapshot",
+            "files": [{"path": "ASSEMBLED", "content": "1", "content_type": "text/plain", "encoding": "utf-8"}],
+            "delete": [],
+            "entry_point": None,
+            "build_command": None,
+            "test_command": None,
+            "verification_steps": [],
+            "notes": ""
+        }))
+    else:
+        last_err = ""
+        last_out = ""
+        manifest = None
+        stage = None
 
-    for attempt in range(1, MAX_ATTEMPTS + 1):
-        prompt = base_prompt
-        if attempt > 1:
-            prompt = prompt + _policy_enforcement_block(attempt, last_err)
+        for attempt in range(1, MAX_ATTEMPTS + 1):
+            prompt = base_prompt
+            if attempt > 1:
+                prompt = prompt + _policy_enforcement_block(attempt, last_err)
 
-        out_text = call_gemini(api_key, prompt, model=model, endpoint_base=base, timeout_s=240)
-        last_out = out_text
-        if out_text.strip() == "":
-            last_err = "FD_FAIL: model returned empty output"
-            continue
+            out_text = call_gemini(api_key, prompt, model=model, endpoint_base=base, timeout_s=240)
+            last_out = out_text
+            if out_text.strip() == "":
+                last_err = "FD_FAIL: model returned empty output"
+                continue
 
-        try:
-            manifest = load_manifest_from_text(out_text)
-        except Exception as exc:
-            last_err = "FD_FAIL: invalid manifest: " + str(exc)
-            continue
+            try:
+                manifest = load_manifest_from_text(out_text)
+            except Exception as exc:
+                last_err = "FD_FAIL: invalid manifest: " + str(exc)
+                continue
 
-        stage = Path(tempfile.mkdtemp(prefix="fd_wi_stage_"))
-        pipeline_base = Path(repo_root) / "pipeline_base" / "pipeline_app"
-        if pipeline_base.exists():
-            shutil.copytree(pipeline_base, stage / "pipeline_app", dirs_exist_ok=True)
+            stage = Path(tempfile.mkdtemp(prefix="fd_wi_stage_"))
+            pipeline_base = Path(repo_root) / "pipeline_base" / "pipeline_app"
+            if pipeline_base.exists():
+                shutil.copytree(pipeline_base, stage / "pipeline_app", dirs_exist_ok=True)
 
-        try:
-            apply_manifest(manifest, stage)
-        except Exception as exc:
-            # Common cases: non-ascii content detected, path violations, etc
-            last_err = "FD_FAIL: apply_manifest failed: " + str(exc)
-            continue
+            try:
+                apply_manifest(manifest, stage)
+            except Exception as exc:
+                last_err = "FD_FAIL: apply_manifest failed: " + str(exc)
+                continue
 
-        # Success
-        break
+            break
 
-    if manifest is None or stage is None:
-        # Include last_err only. Do not print full model output to avoid noise/secrets.
-        return die("FD_FAIL: wi execution failed after " + str(MAX_ATTEMPTS) + " attempts: " + last_err, 1)
+        if manifest is None or stage is None:
+            return die("FD_FAIL: wi execution failed after " + str(MAX_ATTEMPTS) + " attempts: " + last_err, 1)
 
         # Enforce special WI behaviors deterministically.
     if wi_id == "WI-AUTO-PUBLISH-APP":
