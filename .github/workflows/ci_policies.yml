@@ -2,9 +2,21 @@ name: FD Policy Checks
 
 on:
   pull_request:
+    paths:
+      - '.github/workflows/**'
+      - 'tools/**'
+      - 'src/**'
+      - 'agent_guides/**'
+      - 'backlog/**'
   push:
     branches:
       - main
+    paths:
+      - '.github/workflows/**'
+      - 'tools/**'
+      - 'src/**'
+      - 'agent_guides/**'
+      - 'backlog/**'
 
 jobs:
   policy:

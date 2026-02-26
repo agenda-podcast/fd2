@@ -172,7 +172,10 @@ def main() -> int:
     if os.environ.get("FD_BOT_TOKEN", "") != "":
         next_issue = pick_next_wi_issue_number(token)
         if next_issue != 0:
-            dispatch_workflow("orchestrate_wi_issue.yml", "main", {"issue_number": str(next_issue), "role_guide": ""}, token)
+            try:
+                dispatch_workflow("orchestrate_wi_issue.yml", "main", {"issue_number": str(next_issue), "role_guide": ""}, token)
+            except RuntimeError as exc:
+                print("FD_WARN: dispatch_workflow failed: " + str(exc))
 
     return 0
 
