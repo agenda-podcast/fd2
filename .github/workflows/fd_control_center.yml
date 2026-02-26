@@ -1,0 +1,94 @@
+name: [MANUAL] FD Control Center
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Operation"
+        type: choice
+        options:
+          - milestone_plan
+          - dispatch_next_wi
+          - run_wi_issue
+        required: true
+      issue_number:
+        description: "GitHub Issue number (MS or WI)"
+        required: false
+        default: ""
+      role:
+        description: "Role guide for run_wi_issue (ignored for other modes)"
+        type: choice
+        options:
+          - AUTO
+          - PM
+          - TECH_LEAD
+          - TECH_WRITER
+          - DEVOPS
+          - FE
+          - BE
+          - REVIEWER
+          - QA
+        required: true
+        default: AUTO
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+      issues: write
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      FD_BOT_TOKEN: ${{ secrets.FD_BOT_TOKEN }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Clean Python bytecode
+        run: |
+          find . -type d -name __pycache__ -prune -exec rm -rf {} +
+          find . -type f -name "*.pyc" -delete
+
+      - name: Run requested mode
+        shell: bash
+        run: |
+          set -e
+          MODE="${{ github.event.inputs.mode }}"
+          ISSUE="${{ github.event.inputs.issue_number }}"
+          ROLE="${{ github.event.inputs.role }}"
+
+          if [ "$MODE" = "milestone_plan" ]; then
+            if [ -z "$ISSUE" ]; then
+              echo "FD_FAIL: missing issue_number for milestone_plan"
+              exit 2
+            fi
+            python3 tools/orchestrator/run_milestone_issue.py "$ISSUE" "ROLE_PM.txt"
+            exit 0
+          fi
+
+          if [ "$MODE" = "dispatch_next_wi" ]; then
+            python3 tools/orchestrator/dispatch_next_wi.py
+            exit 0
+          fi
+
+          if [ "$MODE" = "run_wi_issue" ]; then
+            if [ -z "$ISSUE" ]; then
+              echo "FD_FAIL: missing issue_number for run_wi_issue"
+              exit 2
+            fi
+            GUIDE=""
+            if [ "$ROLE" != "AUTO" ]; then
+              GUIDE="ROLE_${ROLE}.txt"
+            fi
+            python3 tools/orchestrator/run_wi_issue.py "$ISSUE" "$GUIDE"
+            exit 0
+          fi
+
+          echo "FD_FAIL: unknown mode"
+          exit 2

@@ -70,7 +70,7 @@ def main() -> int:
     role_map = load_role_model_map()
     role = _extract_field(body, "Receiver Role (Next step)") or "Engineer"
     model = model_for_role(role_map, role)
-    base = endpoint_base()
+    base = endpoint_base(role_map)
 
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
     if run_policy_checks(repo_root) != 0:
