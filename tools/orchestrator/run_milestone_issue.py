@@ -107,14 +107,6 @@ def main() -> int:
     issue_text = "TITLE\n" + title + "\n\nBODY\n" + body + "\n"
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
     prompt = build_prompt_from_text(os.path.join(repo_root, "agent_guides"), role_guide_file, issue_text)
-    # Milestone planning is a special run type: it must always produce a repo_patch artifact
-    # containing only planning handoff docs (no pipeline snapshot). Enforce output constraints
-    # in the prompt to reduce invalid manifests.
-    prompt += "\n\nMILESTONE RUN OUTPUT REQUIREMENTS (MUST)\n"
-    prompt += "- work_item_id MUST equal the milestone id: " + ms_id + "\n"
-    prompt += "- artifact_type MUST be: repo_patch\n"
-    prompt += "- Produce handoff/work_items/*.md files as needed for the next steps.\n"
-    prompt += "- Do not output pipeline snapshots in milestone planning.\n"
 
     role_map = load_role_model_map()
     role = role_from_guide_filename(role_guide_file)
@@ -125,16 +117,12 @@ def main() -> int:
         die("FD_FAIL: model returned empty output role=" + role + " model=" + model)
     manifest = load_manifest_from_text(out_text)
 
-    # Deterministic normalization: models sometimes emit WI ids and pipeline artifact types.
-    # For milestone planning, we hard-set both fields to the required milestone values.
     if manifest.work_item_id != ms_id:
-        sys.stdout.write("FD_WARN: overriding manifest.work_item_id to milestone id expected=" + ms_id + " got=" + manifest.work_item_id + "\n")
-        manifest.work_item_id = ms_id
+        die("FD_FAIL: work_item_id must equal milestone id expected=" + ms_id)
     if manifest.artifact_type != "repo_patch":
-        sys.stdout.write("FD_WARN: overriding manifest.artifact_type to repo_patch expected=repo_patch got=" + manifest.artifact_type + "\n")
-        manifest.artifact_type = "repo_patch"
+        die("FD_FAIL: artifact_type must be repo_patch")
 
-    ts = datetime.datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+    ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%S")
     tag = "FD-" + ms_id + "-PM-" + ts
 
     created_wi_links = []
