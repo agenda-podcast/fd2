@@ -1,4 +1,4 @@
-name: FD Policy Checks
+name: "FD Policy Checks"
 
 on:
   push:

@@ -9,13 +9,13 @@ def _extract_field(text: str, key: str) -> str:
             return line.split(":", 1)[1].strip()
     return ""
 
-def _parse_task_number(task_num: str) -> Tuple[int, Tuple[int, ...]]:
+def _parse_task_number(task_num: str) -> Tuple[int, List[int]]:
     s = task_num.strip()
     if s == "":
         return (9999, (9999,))
     if not re.match(r"^[0-9]+(\.[0-9]+)*$", s):
         return (9999, (9999,))
-    parts = tuple(int(x) for x in s.split("."))
+    parts = [int(x) for x in s.split(".")]
     depth = len(parts)
     return (depth, parts)
 
@@ -30,7 +30,7 @@ def _wi_numeric_from_title(title: str) -> int:
 
 def pick_next_wi_issue_number(token: str) -> int:
     issues = list_open_issues(token)
-    candidates: List[Tuple[int, Tuple[int, ...], int, int]] = []
+    candidates: List[Tuple[int, List[int], int, int]] = []
     for it in issues:
         if isinstance(it, dict) and it.get("pull_request") is not None:
             continue

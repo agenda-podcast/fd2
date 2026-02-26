@@ -1,4 +1,4 @@
-name: [MANUAL] FD Control Center
+name: "[MANUAL] FD Control Center"
 on:
   workflow_dispatch:
     inputs:
