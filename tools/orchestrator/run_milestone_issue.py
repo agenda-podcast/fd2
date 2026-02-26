@@ -21,6 +21,7 @@ from src.github_api import get_issue, create_issue, create_comment, close_issue,
 from tools.check_ascii import run as check_ascii_run
 from tools.check_line_limits import run as check_lines_run
 from tools.check_no_ellipses import run as check_ellipses_run
+import re
 
 
 def die(msg: str) -> None:
