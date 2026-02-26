@@ -52,7 +52,6 @@ jobs:
           python3 tools/orchestrator/run_milestone_issue.py "${{ inputs.issue_number }}" "${{ inputs.role_guide }}"
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-      FD_BOT_TOKEN: ${{ secrets.FD_BOT_TOKEN }}
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FD_BOT_TOKEN: ${{ secrets.FD_BOT_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

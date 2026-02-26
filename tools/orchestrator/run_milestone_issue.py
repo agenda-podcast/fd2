@@ -16,7 +16,7 @@ from src.fd_manifest import load_manifest_from_text
 from src.fd_apply import apply_manifest
 from src.fd_zip import zip_dir
 from src.fd_release import write_json, write_text, gh_release_create
-from src.github_api import get_issue, create_issue, create_comment
+from src.github_api import get_issue, create_issue, create_comment, close_issue, dispatch_workflow
 
 from tools.check_ascii import run as check_ascii_run
 from tools.check_line_limits import run as check_lines_run
@@ -262,78 +262,3 @@ def _copy_tree(src: str, dst: str) -> None:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
-
-
-def _extract_field(text: str, key: str) -> str:
-    for line in text.splitlines():
-        if line.startswith(key + ":"):
-            return line.split(":", 1)[1].strip()
-    return ""
-
-def build_wi_issue_title(wi_text: str) -> str:
-    wi_id = _extract_field(wi_text, "Work Item ID")
-    task_num = _extract_field(wi_text, "Task Number")
-    title = _extract_field(wi_text, "Title")
-    recv = _extract_field(wi_text, "Receiver Role (Next step)")
-    parts = []
-    if wi_id != "":
-        parts.append(wi_id)
-    if task_num != "":
-        parts.append(task_num)
-    if title != "":
-        parts.append("-")
-        parts.append(title)
-    if recv != "":
-        parts.append("->")
-        parts.append(recv)
-    if len(parts) == 0:
-        return "Work Item"
-    return " ".join(parts)
-
-def _task_depth(task_num: str) -> int:
-    if task_num.strip() == "":
-        return 999
-    return len([p for p in task_num.split(".") if p.strip() != ""])
-
-def _task_key(task_num: str):
-    if task_num.strip() == "":
-        return (999, [])
-    nums = []
-    for p in task_num.split("."):
-        p = p.strip()
-        if p == "":
-            continue
-        try:
-            nums.append(int(p))
-        except Exception:
-            nums.append(999)
-    return (_task_depth(task_num), nums)
-
-def _wi_sort_key(wi_text: str):
-    task_num = _extract_field(wi_text, "Task Number")
-    wi_id = _extract_field(wi_text, "Work Item ID")
-    return (_task_key(task_num), wi_id)
-
-def close_issue(issue_number: int, token: str):
-    import urllib.request, json
-    url = _api_base() + "/issues/" + str(issue_number)
-    req = urllib.request.Request(url, method="PATCH")
-    req.add_header("Authorization", "token " + token)
-    req.add_header("Accept", "application/vnd.github+json")
-    data = json.dumps({"state":"closed"}).encode("utf-8")
-    with urllib.request.urlopen(req, data=data, timeout=30) as resp:
-        resp.read()
-
-def dispatch_wi_issue(issue_number: int, token: str):
-    # Dispatch workflow orchestrate_wi_issue.yml
-    import urllib.request, json
-    url = _api_base() + "/actions/workflows/orchestrate_wi_issue.yml/dispatches"
-    req = urllib.request.Request(url, method="POST")
-    req.add_header("Authorization", "token " + token)
-    req.add_header("Accept", "application/vnd.github+json")
-    req.add_header("Content-Type", "application/json")
-    payload = {"ref":"main","inputs":{"issue_number":str(issue_number)}}
-    data = json.dumps(payload).encode("utf-8")
-    with urllib.request.urlopen(req, data=data, timeout=30) as resp:
-        resp.read()

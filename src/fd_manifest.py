@@ -28,7 +28,7 @@ class ArtifactManifest:
 def parse_manifest(obj: Dict[str, Any]) -> ArtifactManifest:
     if obj.get("schema_version") != SCHEMA_VERSION:
         raise ValueError("schema_version mismatch")
-    if obj.get("notes") != "":
+    if obj.get("notes", "") != "":
         raise ValueError("notes must be empty string")
     files_raw = obj.get("files")
     if not isinstance(files_raw, list) or len(files_raw) == 0:
