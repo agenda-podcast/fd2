@@ -13,6 +13,8 @@ jobs:
       PYTHONDONTWRITEBYTECODE: "1"
       FD_BOT_TOKEN: ${{ secrets.FD_BOT_TOKEN }}
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Provided for consistency; gh is not invoked in this workflow.
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout main
         uses: actions/checkout@v4

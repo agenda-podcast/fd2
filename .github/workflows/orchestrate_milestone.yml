@@ -1,19 +1,20 @@
-name: "Run Work Item (Issue -> Gemini -> Release)"
+name: "Orchestrate Milestone (Manual Start)"
+
 on:
   workflow_dispatch:
     inputs:
       issue_number:
-        description: GitHub issue number for the Work Item
+        description: "GitHub Issue number for the Milestone (title must start with MS-)"
         required: true
         default: "1"
       role_guide:
-        description: Optional override role guide under agent_guides/
-        required: false
-        default: ""
+        description: "Role guide file under agent_guides/ (usually ROLE_PM.txt)"
+        required: true
+        default: "ROLE_PM.txt"
 
 jobs:
   run:
-    if: github.event_name == "workflow_dispatch"
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -27,11 +28,17 @@ jobs:
       # Required for `gh release create` in src/fd_release.py
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
       - name: Clean Python bytecode
         run: |
           find . -type d -name __pycache__ -prune -exec rm -rf {} + || true
           find . -type f -name "*.pyc" -delete || true
-      - name: Run WI orchestrator
+
+      - name: Plan milestone and create WI issues
         run: |
-          python3 tools/orchestrator/run_wi_issue.py "${{ inputs.issue_number }}" "${{ inputs.role_guide }}"
+          python3 tools/orchestrator/run_milestone_issue.py "${{ inputs.issue_number }}" "${{ inputs.role_guide }}"

@@ -43,6 +43,9 @@ jobs:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       FD_BOT_TOKEN: ${{ secrets.FD_BOT_TOKEN }}
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # The GitHub CLI (gh) uses GH_TOKEN for authentication in Actions.
+      # Our release publisher uses `gh release create`, so provide GH_TOKEN.
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout main
         uses: actions/checkout@v4

@@ -1,39 +1,50 @@
-name: "FD Policy Checks"
+name: "FD CI Policies"
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - '.github/workflows/**'
-      - 'tools/**'
-      - 'src/**'
-      - 'agent_guides/**'
-      - 'backlog/**'
-      - 'docs/**'
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Reason for running the FD policy checks"
+        required: false
+        default: "manual run"
+  workflow_call:
+    inputs:
+      reason:
+        required: false
+        type: string
+    secrets: {}
+
+permissions:
+  contents: read
 
 jobs:
-  policy:
+  policy-checks:
+    name: Run FD policy checks
     runs-on: ubuntu-latest
     env:
+      # Prevent Python from writing __pycache__ / .pyc which would violate
+      # FD policy checks (non-source artifacts must not be present).
       PYTHONDONTWRITEBYTECODE: "1"
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Clean Python bytecode
-        run: |
-          find . -type d -name __pycache__ -prune -exec rm -rf {} +
-          find . -type f -name "*.pyc" -delete
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
 
-      - name: Policy - Workflow triggers
-        run: python3 tools/check_workflow_triggers.py .
-
-      - name: Policy - ASCII
+      - name: Verify ASCII only
         run: python3 tools/check_ascii.py .
 
-      - name: Policy - Line limits
+      - name: Enforce maximum line counts
         run: python3 tools/check_line_limits.py .
 
-      - name: Policy - No ellipses
+      - name: Ensure no ellipses present
         run: python3 tools/check_no_ellipses.py .
+
+      - name: Validate workflow triggers
+        run: python3 tools/check_workflow_triggers.py .
+
+      - name: Confirm required workflows exist
+        run: python3 tools/check_workflows_present.py .
