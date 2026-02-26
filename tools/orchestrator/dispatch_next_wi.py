@@ -16,7 +16,7 @@ def main() -> int:
     if token == "":
         print("FD_FAIL: missing token (FD_BOT_TOKEN or GITHUB_TOKEN)")
         return 2
-    next_issue = pick_next_wi_issue_number(token)
+    next_issue = pick_next_wi_issue_number(token, exclude=set())
     if next_issue == 0:
         print("FD_OK: no open work items")
         return 0

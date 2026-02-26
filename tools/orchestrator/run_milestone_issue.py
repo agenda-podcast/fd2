@@ -206,19 +206,23 @@ def main() -> int:
                 elif line.startswith("Work Item ID:"):
                     wi_id = line.split(":", 1)[1].strip()
             def _task_key(task_num: str):
-                if task_num.strip() == "":
-                    return (999, [])
-                parts = []
-                for p in task_num.split("."):
-                    p = p.strip()
-                    if p == "":
-                        continue
-                    try:
-                        parts.append(int(p))
-                    except Exception:
-                        parts.append(999)
-                return (len(parts), parts)
+                s = task_num.strip()
+                if s == "":
+                    return (9999,)
+                if not re.match(r"^[0-9]+(\.[0-9]+)*$", s):
+                    return (9999,)
+                parts = [int(x) for x in s.split(".") if x.strip() != ""]
+                pad = 8
+                padded = parts[:pad] + [9999] * max(0, pad - len(parts))
+                return tuple(padded)
             wi_items.append((_task_key(tn), wi_id, f.content))
+
+        # FD_MANDATORY_TAIL_STEPS: always append final documentation + app publish steps
+        tw_body = """# Work Item\n\nWork Item ID: WI-AUTO-TECH-WRITER\nMilestone ID: """ + ms_id + """\nTitle: Author How-To-Use-The-App guide\nOwner Role (Producer): Tech Writer\nReceiver Role (Next step): Owner\nType: Feature\nPriority: P1\nTarget Environment: Docs\n\n## Intent and Scope\n\nProblem / Goal (2-3 lines):\nCreate very detailed end-user documentation and a How To Use The App guide for the app produced by this milestone.\n\nIn Scope:\n- End-to-end user guide with prerequisites, setup, configuration, and troubleshooting\n- Screenshots/commands placeholders, step-by-step flows, and FAQ\n\nOut of Scope:\n- Implementing code changes\n\nAssumptions:\n- App branch exists or will exist after build/publish WI\n\nDependencies (explicit IDs):\n- """ + ms_id + """\n\n## Acceptance Criteria (Given/When/Then)\n\nAC1: Given a new user, when they follow the guide, then they can run the app without extra questions.\nAC2: Given a failure case, when user checks troubleshooting, then they can recover or know next action.\n\n## Evidence Required\n- Release artifact includes docs files (markdown or html)\n\n## Definition of Done\n- Guide is complete and reproducible.\n"""\n
+        pub_body = """# Work Item\n\nWork Item ID: WI-AUTO-PUBLISH-APP\nMilestone ID: """ + ms_id + """\nTitle: Build app snapshot and publish as dedicated app branch\nOwner Role (Producer): DevOps / Platform Engineer\nReceiver Role (Next step): Owner\nType: Feature\nPriority: P0\nTarget Environment: main -> app branch\n\n## Intent and Scope\n\nProblem / Goal (2-3 lines):\nPackage the full application into a clean folder structure and publish it to a dedicated branch that runs the app only.\n\nIn Scope:\n- Produce manifest with artifact_type pipeline_snapshot\n- Ensure pipeline_app contains runnable app (server entry point, assets)\n- Provide minimal app CI workflow in branch\n\nOut of Scope:\n- Editing FD orchestrator logic\n\nAssumptions:\n- FD runner will publish branch when artifact_type is pipeline_snapshot\n\nDependencies (explicit IDs):\n- """ + ms_id + """\n\n## Acceptance Criteria (Given/When/Then)\n\nAC1: Given the branch is published, when user checks branches, then app branch exists and contains only app files.\nAC2: Given app CI runs on push, when app branch workflow runs, then it passes smoke test.\n\n## Evidence Required\n- Release includes artifact.zip + manifest.json\n- Branch name comment posted\n\n## Definition of Done\n- Branch is usable as-is.\n"""\n
+        wi_items.append((_task_key("99.8"), "WI-AUTO-PUBLISH-APP", pub_body))
+        wi_items.append((_task_key("99.9"), "WI-AUTO-TECH-WRITER", tw_body))
+
 
         wi_items.sort(key=lambda x: (x[0], x[1]))
 

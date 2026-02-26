@@ -4,6 +4,8 @@ import shutil
 import sys
 import tempfile
 import datetime
+import subprocess
+import re
 from pathlib import Path
 
 sys.dont_write_bytecode = True
@@ -33,21 +35,6 @@ def _extract_field(text: str, key: str) -> str:
             return line.split(":", 1)[1].strip()
     return ""
 
-def _task_key(task_num: str):
-    if task_num.strip() == "":
-        return (999, [])
-    parts = []
-    for p in task_num.split("."):
-        p = p.strip()
-        if p == "":
-            continue
-        try:
-            parts.append(int(p))
-        except Exception:
-            parts.append(999)
-    return (len(parts), parts)
-
-
 _ROLE_TO_GUIDE = {
     "PM": "ROLE_PM.txt",
     "TECH_LEAD": "ROLE_TECH_LEAD.txt",
@@ -59,12 +46,10 @@ _ROLE_TO_GUIDE = {
     "REVIEWER": "ROLE_REVIEWER.txt",
 }
 
-
 def role_guide_for_issue_body(body: str) -> str:
     raw = _extract_field(body, "Receiver Role (Next step)")
     role = normalize_role_name(raw).strip().upper()
     return _ROLE_TO_GUIDE.get(role, "ROLE_BE.txt")
-
 
 def run_policy_checks(repo_root: str) -> int:
     cwd = os.getcwd()
@@ -89,6 +74,61 @@ def run_policy_checks(repo_root: str) -> int:
         os.chdir(cwd)
     return 0
 
+def _slug(s: str) -> str:
+    s = s.strip().lower()
+    s = re.sub(r"[^a-z0-9]+", "-", s)
+    s = re.sub(r"-+", "-", s).strip("-")
+    return s[:40] if s else "app"
+
+def _write_app_workflow(stage_root: Path) -> None:
+    wf_dir = stage_root / ".github" / "workflows"
+    wf_dir.mkdir(parents=True, exist_ok=True)
+    # App branch is allowed to have push triggers; FD policy checks only gate main.
+    wf = """name: \"App CI\"\n\n""" + \
+         "on:\n  push: {}\n\n" + \
+         "jobs:\n  smoke:\n    runs-on: ubuntu-latest\n    steps:\n" + \
+         "      - uses: actions/checkout@v4\n" + \
+         "      - uses: actions/setup-node@v4\n        with:\n          node-version: '20'\n" + \
+         "      - name: Start server and smoke test\n        run: |\n" + \
+         "          node pipeline_app/server.js &\n" + \
+         "          sleep 2\n" + \
+         "          curl -fsS http://127.0.0.1:8080/ > /dev/null\n"
+    (wf_dir / "app_ci.yml").write_text(wf, encoding="utf-8")
+
+def _publish_app_branch(repo_root: str, stage: Path, branch_name: str) -> None:
+    # This runs inside GitHub Actions with a checkout already present.
+    # We replace the working tree contents with stage contents and push a branch.
+    cwd = os.getcwd()
+    os.chdir(repo_root)
+    try:
+        subprocess.check_call(["git", "config", "user.email", "actions@github.com"])
+        subprocess.check_call(["git", "config", "user.name", "github-actions"])
+        subprocess.check_call(["git", "checkout", "-B", branch_name])
+        # Remove everything except .git
+        for entry in os.listdir(repo_root):
+            if entry == ".git":
+                continue
+            p = os.path.join(repo_root, entry)
+            if os.path.isdir(p):
+                shutil.rmtree(p, ignore_errors=True)
+            else:
+                try:
+                    os.remove(p)
+                except Exception:
+                    pass
+        # Copy stage into repo root
+        for entry in os.listdir(stage):
+            src = stage / entry
+            dst = Path(repo_root) / entry
+            if src.is_dir():
+                shutil.copytree(src, dst, dirs_exist_ok=True)
+            else:
+                shutil.copy2(src, dst)
+        subprocess.check_call(["git", "add", "-A"])
+        subprocess.check_call(["git", "commit", "-m", "Publish app snapshot"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.check_call(["git", "push", "-u", "origin", branch_name])
+    finally:
+        os.chdir(cwd)
 
 def main() -> int:
     if len(sys.argv) < 2:
@@ -104,12 +144,11 @@ def main() -> int:
         return die("FD_FAIL: missing GITHUB_TOKEN")
 
     issue = get_issue(issue_number, token)
-    title = str(issue.get("title") or "")
     body = str(issue.get("body") or "")
 
     role_guide = role_guide_override.strip() or role_guide_for_issue_body(body)
     role_map = load_role_model_map()
-    raw_role = _extract_field(body, "Receiver Role (Next step)") or "Engineer"
+    raw_role = _extract_field(body, "Owner Role (Producer)") or _extract_field(body, "Receiver Role (Next step)") or "Engineer"
     role = normalize_role_name(raw_role) or "PM"
     model = model_for_role(role, role_map)
     base = endpoint_base(role_map)
@@ -127,14 +166,16 @@ def main() -> int:
     manifest = load_manifest_from_text(out_text)
 
     stage = Path(tempfile.mkdtemp(prefix="fd_wi_stage_"))
-    # Use pipeline_base if exists, else empty stage
-    pipeline_base = Path(repo_root) / "pipeline_base"
+    pipeline_base = Path(repo_root) / "pipeline_base" / "pipeline_app"
     if pipeline_base.exists():
-        shutil.copytree(pipeline_base, stage, dirs_exist_ok=True)
+        shutil.copytree(pipeline_base, stage / "pipeline_app", dirs_exist_ok=True)
 
     apply_manifest(manifest, stage)
 
-    # Build artifact
+    # If this WI produces an app snapshot, ensure the app branch has its own CI workflow.
+    if manifest.artifact_type == "pipeline_snapshot":
+        _write_app_workflow(stage)
+
     artifacts_dir = Path(tempfile.mkdtemp(prefix="fd_wi_artifacts_"))
     artifact_zip = artifacts_dir / "artifact.zip"
     zip_dir(stage, artifact_zip)
@@ -170,10 +211,20 @@ def main() -> int:
     create_comment(issue_number, "FD_WI_DONE\nRELEASE=" + rel_tag, token)
     close_issue(issue_number, token)
 
-    # Dispatch next WI if possible (needs FD_BOT_TOKEN to avoid recursion limits)
+    # Publish app branch if requested.
+    if manifest.artifact_type == "pipeline_snapshot":
+        ms_id = _extract_field(body, "Milestone ID") or "MS-01"
+        branch_name = "app-" + _slug(ms_id)
+        try:
+            _publish_app_branch(repo_root, stage, branch_name)
+            create_comment(issue_number, "FD_APP_BRANCH_PUBLISHED\nBRANCH=" + branch_name, token)
+        except Exception as exc:
+            print("FD_WARN: app branch publish failed: " + str(exc))
+
+    # Dispatch next WI once. Exclude current issue number to avoid eventual consistency loops.
     if os.environ.get("FD_BOT_TOKEN", "") != "":
-        next_issue = pick_next_wi_issue_number(token)
-        if next_issue != 0:
+        next_issue = pick_next_wi_issue_number(token, exclude={issue_number})
+        if next_issue != 0 and next_issue != issue_number:
             try:
                 dispatch_workflow("orchestrate_wi_issue.yml", "main", {"issue_number": str(next_issue), "role_guide": ""}, token)
             except RuntimeError as exc:
