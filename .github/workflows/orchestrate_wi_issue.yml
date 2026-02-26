@@ -1,5 +1,4 @@
 name: [INTERNAL] Run Work Item (Issue -> Gemini -> Release)
-
 on:
   workflow_dispatch:
     inputs:
@@ -14,6 +13,7 @@ on:
 
 jobs:
   run:
+    if: github.event_name == "workflow_dispatch"
     runs-on: ubuntu-latest
     permissions:
       contents: write

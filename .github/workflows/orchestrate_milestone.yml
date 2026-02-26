@@ -1,5 +1,4 @@
 name: [MANUAL] Orchestrate Milestone
-
 on:
   workflow_dispatch:
     inputs:
@@ -17,6 +16,7 @@ permissions:
 
 jobs:
   run:
+    if: github.event_name == "workflow_dispatch"
     runs-on: ubuntu-latest
     env:
       PYTHONDONTWRITEBYTECODE: "1"

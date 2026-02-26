@@ -1,10 +1,10 @@
 name: [MANUAL] Dispatch Next Work Item (Queue)
-
 on:
   workflow_dispatch: {}
 
 jobs:
   dispatch:
+    if: github.event_name == "workflow_dispatch"
     runs-on: ubuntu-latest
     permissions:
       actions: write
