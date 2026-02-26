@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 
 from src.fd_prompt import build_prompt_from_text
 from src.gemini_client import call_gemini
-from src.role_config import load_role_model_map, model_for_role, endpoint_base
+from src.role_config import load_role_model_map, model_for_role, endpoint_base, normalize_role_name
 from src.fd_manifest import load_manifest_from_text
 from src.fd_apply import apply_manifest
 from src.fd_zip import zip_dir
@@ -61,7 +61,8 @@ _ROLE_TO_GUIDE = {
 
 
 def role_guide_for_issue_body(body: str) -> str:
-    role = _extract_field(body, "Receiver Role (Next step)").strip().upper()
+    raw = _extract_field(body, "Receiver Role (Next step)")
+    role = normalize_role_name(raw).strip().upper()
     return _ROLE_TO_GUIDE.get(role, "ROLE_BE.txt")
 
 
@@ -108,7 +109,8 @@ def main() -> int:
 
     role_guide = role_guide_override.strip() or role_guide_for_issue_body(body)
     role_map = load_role_model_map()
-    role = _extract_field(body, "Receiver Role (Next step)") or "Engineer"
+    raw_role = _extract_field(body, "Receiver Role (Next step)") or "Engineer"
+    role = normalize_role_name(raw_role) or "PM"
     model = model_for_role(role, role_map)
     base = endpoint_base(role_map)
 

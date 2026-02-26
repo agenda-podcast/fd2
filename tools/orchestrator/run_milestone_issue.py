@@ -112,8 +112,7 @@ def main() -> int:
         stage = os.path.join(tmp, "stage")
         os.makedirs(stage, exist_ok=True)
 
-        # Stage is repo snapshot + injected handoff files, used only for artifact.zip.
-        _copy_tree(repo_root, stage)
+        # Stage starts empty. For milestone planning, we only package the produced handoff files.
         apply_manifest(manifest, stage)
         run_policy_checks(stage)
 

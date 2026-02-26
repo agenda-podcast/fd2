@@ -9,19 +9,15 @@ def _extract_field(text: str, key: str) -> str:
             return line.split(":", 1)[1].strip()
     return ""
 
-def _parse_task_number(task_num: str) -> Tuple[int, Tuple[int, int]]:
+def _parse_task_number(task_num: str) -> Tuple[int, Tuple[int, ...]]:
     s = task_num.strip()
     if s == "":
-        return (9999, (9999, 0))
+        return (9999, (9999,))
     if not re.match(r"^[0-9]+(\.[0-9]+)*$", s):
-        return (9999, (9999, 0))
-    parts = [int(x) for x in s.split(".")]
+        return (9999, (9999,))
+    parts = tuple(int(x) for x in s.split("."))
     depth = len(parts)
-    # Represent up to 2 levels in key; deeper levels are folded into a stable hash-less order.
-    # This keeps sorting deterministic while avoiding the "dotdotdot" token.
-    a = parts[0]
-    b = parts[1] if depth > 1 else 0
-    return (depth, (a, b))
+    return (depth, parts)
 
 def _wi_numeric_from_title(title: str) -> int:
     m = re.search(r"\bWI-([0-9]{3,})\b", title)
@@ -34,7 +30,7 @@ def _wi_numeric_from_title(title: str) -> int:
 
 def pick_next_wi_issue_number(token: str) -> int:
     issues = list_open_issues(token)
-    candidates: List[Tuple[int, Tuple[int, int], int, int]] = []
+    candidates: List[Tuple[int, Tuple[int, ...], int, int]] = []
     for it in issues:
         if isinstance(it, dict) and it.get("pull_request") is not None:
             continue
@@ -49,5 +45,5 @@ def pick_next_wi_issue_number(token: str) -> int:
         candidates.append((depth, pair, wi_num, issue_no))
     if not candidates:
         return 0
-    candidates.sort(key=lambda x: (x[0], x[1][0], x[1][1], x[2], x[3]))
+    candidates.sort(key=lambda x: (x[0],) + tuple(x[1]) + (x[2], x[3]))
     return candidates[0][3]

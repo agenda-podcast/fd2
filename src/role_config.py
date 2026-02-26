@@ -39,6 +39,47 @@ def role_from_guide_filename(role_guide_filename: str) -> str:
             return v
     return "PM"
 
+def normalize_role_name(raw: str) -> str:
+    s = (raw or "").strip()
+    if s == "":
+        return ""
+    u = s.upper()
+    # Common canonical names
+    if u in ("PM", "PRODUCT MANAGER", "PRODUCT"):
+        return "PM"
+    if u.startswith("TECH LEAD") or u.startswith("ARCHITECT") or "DELIVERY LEAD" in u:
+        return "TECH_LEAD"
+    if u.startswith("TECH WRITER") or u.startswith("DOCUMENTATION"):
+        return "TECH_WRITER"
+    if u.startswith("QA") or "QUALITY" in u:
+        return "QA"
+    if u.startswith("DEVOPS") or "PLATFORM" in u:
+        return "DEVOPS"
+    if u.startswith("FRONTEND") or u == "FE":
+        return "FE"
+    if u.startswith("BACKEND") or u == "BE":
+        return "BE"
+    if u.startswith("CODE REVIEW") or u.startswith("REVIEWER"):
+        return "REVIEWER"
+    # Try to match tokens like "Tech Lead (Architecture / Delivery Lead)"
+    if "PM" == u:
+        return "PM"
+    if "TECH LEAD" in u:
+        return "TECH_LEAD"
+    if "TECH WRITER" in u:
+        return "TECH_WRITER"
+    if "DEVOPS" in u:
+        return "DEVOPS"
+    if "FRONTEND" in u:
+        return "FE"
+    if "BACKEND" in u:
+        return "BE"
+    if "REVIEW" in u:
+        return "REVIEWER"
+    if "QA" in u:
+        return "QA"
+    return u.replace(" ", "_")
+
 def model_for_role(role: str, role_map: dict) -> str:
     r = (role or "").strip().upper()
     roles = role_map.get("roles", {})
