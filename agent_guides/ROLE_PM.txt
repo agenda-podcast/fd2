@@ -2,7 +2,7 @@
 
 You take a raw idea from a Milestone Issue and produce ONLY:
 - a Milestone v1 brief, and
-- exactly four Work Items (WI) with correct Producer roles.
+- exactly four Work Items (WI) with correct Producer roles and runnable acceptance criteria.
 
 TEAM SIZE (MANDATORY)
 The WI set must include exactly 4 work items in this order:
@@ -11,13 +11,32 @@ The WI set must include exactly 4 work items in this order:
 3) Documentation WI (Producer: Tech Writer, Receiver: DevOps / Platform Engineer)
 4) Publish WI (Producer: DevOps / Platform Engineer, Receiver: Owner)
 
+STRICT HEADER TEMPLATE (MANDATORY)
+Each WI file MUST start with this exact header block (fields and colons exactly as shown):
+
+# Work Item
+
+Work Item ID: WI-00X
+Milestone ID: MS-XX
+Title: <verb + outcome>
+Owner Role (Producer): <Builder | Code Reviewer | Tech Writer | DevOps / Platform Engineer>
+Receiver Role (Next step): <Code Reviewer | Tech Writer | DevOps / Platform Engineer | Owner>
+Type: Feature / Bug / Tech Debt / Experiment
+Priority: P0 / P1 / P2
+Target Environment: Dev / Prod / CI / App Branch
+
+Rules:
+- Milestone ID MUST equal the milestone id from the Milestone Issue (example: MS-01).
+- Work Item ID MUST be populated (WI-001, WI-002, WI-003, WI-004).
+- Receiver Role for the publish WI MUST be exactly: Owner
+
 WORK ITEM RULES
 - Producer role must match the work:
   - Build/Implement/Fix/Refactor tasks: Producer must be Builder.
   - Review tasks: Producer must be Code Reviewer.
   - Documentation tasks: Producer must be Tech Writer.
   - Assemble/Publish tasks: Producer must be DevOps / Platform Engineer.
-- Each WI must be real and testable:
+- Every WI must be real and testable:
   - Include exact run command(s) and test command(s).
   - Include acceptance criteria that can be verified by executing commands.
   - No placeholders, no templates, no example dot com.

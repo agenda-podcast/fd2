@@ -276,31 +276,46 @@ def _validate_wi_headers(ms_id: str, wi_bodies: List[str]) -> None:
     # Exactly 4 work items required for each milestone.
     if len(wi_bodies) != 4:
         raise RuntimeError("FD_FAIL: milestone must produce exactly 4 work items got=" + str(len(wi_bodies)))
+
     want = [
         ("BUILDER", "REVIEWER"),
         ("REVIEWER", "TECH_WRITER"),
         ("TECH_WRITER", "DEVOPS"),
         ("DEVOPS", "OWNER"),
     ]
+
+    def _fail(msg: str, body: str) -> None:
+        head = "\n".join((body or "").splitlines()[:24])
+        raise RuntimeError(msg + "\nFD_CONTEXT_HEAD:\n" + head)
+
     idx = 0
     for body in wi_bodies:
+        wi_id = _extract_field(body, "Work Item ID")
+        if wi_id == "":
+            _fail("FD_FAIL: WI missing Work Item ID idx=" + str(idx), body)
+
+        ms = _extract_field(body, "Milestone ID")
+        if ms == "":
+            _fail("FD_FAIL: WI missing Milestone ID wi=" + wi_id, body)
+        if ms.strip() != ms_id.strip():
+            _fail("FD_FAIL: WI Milestone ID mismatch wi=" + wi_id + " got=" + ms + " expected=" + ms_id, body)
+
         prod = normalize_role_name(_extract_field(body, "Owner Role (Producer)")).upper()
         recv_raw = _extract_field(body, "Receiver Role (Next step)")
         recv = normalize_role_name(recv_raw).upper()
         title = _extract_field(body, "Title")
-        wi_id = _extract_field(body, "Work Item ID")
-        if ("Milestone ID: " + ms_id) not in body:
-            raise RuntimeError("FD_FAIL: WI missing Milestone ID wi=" + wi_id)
+
         exp_prod, exp_recv = want[idx]
         if prod != exp_prod:
-            raise RuntimeError("FD_FAIL: invalid Producer role wi=" + wi_id + " got=" + prod + " expected=" + exp_prod + " title=" + title)
-        # Receiver role for Owner is not normalized; allow OWNER literal.
+            _fail("FD_FAIL: invalid Producer role wi=" + wi_id + " got=" + prod + " expected=" + exp_prod + " title=" + title, body)
+
         if exp_recv == "OWNER":
             if recv_raw.strip().upper() != "OWNER":
-                raise RuntimeError("FD_FAIL: invalid Receiver role wi=" + wi_id + " got=" + recv_raw + " expected=Owner")
+                _fail("FD_FAIL: invalid Receiver role wi=" + wi_id + " got=" + recv_raw + " expected=Owner", body)
         else:
             if recv != exp_recv:
-                raise RuntimeError("FD_FAIL: invalid Receiver role wi=" + wi_id + " got=" + recv + " expected=" + exp_recv + " title=" + title)
+                _fail("FD_FAIL: invalid Receiver role wi=" + wi_id + " got=" + recv + " expected=" + exp_recv + " title=" + title, body)
+
         idx += 1
 
 def _wi_title_from_body(body: str) -> str:
