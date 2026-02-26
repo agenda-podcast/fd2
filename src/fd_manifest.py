@@ -1,89 +1,77 @@
 import json
 
+from src.fd_types import ArtifactManifest, FileEntry, SCHEMA_VERSION
 from src.fd_patch_v1 import load_manifest_from_patch_text
 
-from dataclasses import dataclass
-from typing import List, Optional, Dict, Any
-
-SCHEMA_VERSION = "FD-ARTIFACT-1.0"
-
-@dataclass
-class FileEntry:
-    path: str
-    content: str
-    content_type: str
-    encoding: str
-
-@dataclass
-class ArtifactManifest:
-    schema_version: str
-    work_item_id: str
-    producer_role: str
-    artifact_type: str
-    files: List[FileEntry]
-    delete: List[str]
-    entry_point: Optional[str]
-    build_command: Optional[str]
-    test_command: Optional[str]
-    verification_steps: List[str]
-    notes: str
-
-def parse_manifest(obj: Dict[str, Any]) -> ArtifactManifest:
-    if obj.get("schema_version") != SCHEMA_VERSION:
-        raise ValueError("schema_version mismatch")
-    if obj.get("notes", "") != "":
-        raise ValueError("notes must be empty string")
-    files_raw = obj.get("files")
-    if not isinstance(files_raw, list) or len(files_raw) == 0:
-        raise ValueError("files must be a non-empty array")
-    files: List[FileEntry] = []
-    for fe in files_raw:
-        files.append(FileEntry(
-            path=str(fe.get("path","")),
-            content=str(fe.get("content","")),
-            content_type=str(fe.get("content_type","")),
-            encoding=str(fe.get("encoding",""))
-        ))
-    delete_raw = obj.get("delete", [])
-    if not isinstance(delete_raw, list):
-        raise ValueError("delete must be an array")
-    vs = obj.get("verification_steps", [])
-    if not isinstance(vs, list):
-        raise ValueError("verification_steps must be an array")
-    return ArtifactManifest(
-        schema_version=obj["schema_version"],
-        work_item_id=str(obj.get("work_item_id","")),
-        producer_role=str(obj.get("producer_role","")),
-        artifact_type=str(obj.get("artifact_type","")),
-        files=files,
-        delete=[str(x) for x in delete_raw],
-        entry_point=obj.get("entry_point"),
-        build_command=obj.get("build_command"),
-        test_command=obj.get("test_command"),
-        verification_steps=[str(x) for x in vs],
-        notes=obj.get("notes","")
-    )
+def _as_str(x) -> str:
+    if x is None:
+        return ""
+    return str(x)
 
 def load_manifest_from_text(text: str) -> ArtifactManifest:
     t = (text or "").strip()
     if t == "":
-        raise ValueError("manifest text is empty")
-    # Some models may wrap JSON in code fences or prepend small prefixes.
+        raise ValueError("empty manifest text")
+
     if t.startswith("```"):
+        # remove code fences if present
         lines = t.splitlines()
-        if len(lines) >= 3 and lines[0].startswith("```") and lines[-1].startswith("```"):
-            t = "\n".join(lines[1:-1]).strip()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].startswith("```"):
+            lines = lines[:-1]
+        t = "\n".join(lines).strip()
+
     if t.startswith("FD_PATCH_V1"):
         return load_manifest_from_patch_text(t)
+
+    # JSON path (backward compatible)
     try:
         obj = json.loads(t)
-    except json.JSONDecodeError:
-        # Best-effort extraction: parse the first JSON object in the output.
+    except Exception:
+        # attempt to extract first json object block
         start = t.find("{")
         end = t.rfind("}")
         if start == -1 or end == -1 or end <= start:
-            raise ValueError("manifest JSON not found in model output")
+            raise
         obj = json.loads(t[start:end+1])
-    if not isinstance(obj, dict):
-        raise ValueError("manifest is not a JSON object")
-    return parse_manifest(obj)
+
+    schema = _as_str(obj.get("schema_version", SCHEMA_VERSION))
+    wi = _as_str(obj.get("work_item_id", ""))
+    prod = _as_str(obj.get("producer_role", ""))
+    art = _as_str(obj.get("artifact_type", "repo_patch"))
+
+    files = []
+    for f in obj.get("files", []) or []:
+        files.append(FileEntry(
+            path=_as_str(f.get("path", "")),
+            content=_as_str(f.get("content", "")),
+            content_type=_as_str(f.get("content_type", "text/plain")),
+            encoding=_as_str(f.get("encoding", "utf-8")),
+        ))
+
+    delete = [str(x) for x in (obj.get("delete", []) or [])]
+    entry_point = obj.get("entry_point")
+    build_command = obj.get("build_command")
+    test_command = obj.get("test_command")
+    verification_steps = [str(x) for x in (obj.get("verification_steps", []) or [])]
+    notes = _as_str(obj.get("notes", ""))
+
+    if wi == "":
+        raise ValueError("missing work_item_id")
+    if prod == "":
+        raise ValueError("missing producer_role")
+
+    return ArtifactManifest(
+        schema_version=schema,
+        work_item_id=wi,
+        producer_role=prod,
+        artifact_type=art,
+        files=files,
+        delete=delete,
+        entry_point=entry_point,
+        build_command=build_command,
+        test_command=test_command,
+        verification_steps=verification_steps,
+        notes=notes,
+    )

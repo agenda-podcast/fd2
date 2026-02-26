@@ -1,7 +1,7 @@
 import os
 from typing import Dict, List, Tuple
 
-from src.fd_manifest import ArtifactManifest, FileEntry, SCHEMA_VERSION
+from src.fd_types import ArtifactManifest, FileEntry, SCHEMA_VERSION
 
 def _fail(msg: str) -> None:
     raise ValueError("FD_PATCH_V1 parse failed: " + msg)
