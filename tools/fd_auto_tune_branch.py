@@ -81,6 +81,29 @@ def _upload_snapshot_chunks(snapshot_text: str, out_dir: Path) -> None:
             print("FD_WARN: snapshot_ack_unexpected chunk=" + str(i+1) + "/" + str(total) + " resp_head=" + resp[:80].replace("\n"," "))
         _write(out_dir / ("snapshot_chunk_" + str(i+1) + "_response.txt"), resp)
 
+def _sanitize_bundle_text(raw: str) -> str:
+    # Remove stray >>> outside file blocks and ensure required metadata lines exist.
+    t = (raw or "").replace("\r\n","\n").replace("\r","\n")
+    lines = t.split("\n")
+    out = []
+    in_file = False
+    for line in lines:
+        if line.strip() == "<<<":
+            in_file = True
+            out.append(line)
+            continue
+        if line.strip() == ">>>":
+            if in_file:
+                in_file = False
+                out.append(line)
+            else:
+                # drop stray terminator
+                continue
+            continue
+        out.append(line)
+    t2 = "\n".join(out).strip() + "\n"
+    return t2
+
 def _get_fix_bundle_and_parse(base_prompt: str, out_dir: Path, max_tries: int = 3):
     last_err = ""
     for k in range(1, max_tries + 1):
@@ -89,11 +112,16 @@ def _get_fix_bundle_and_parse(base_prompt: str, out_dir: Path, max_tries: int = 
             prompt += "\n\nFORMAT_REPAIR\nPrevious output failed to parse: " + last_err + "\n"
             prompt += "Return ONLY FD_BUNDLE_V1 PART 1/Y.\n"
             prompt += "The FIRST line must be: FD_BUNDLE_V1 PART 1/Y\n"
-            prompt += "Metadata lines MUST be key: value (with colon), e.g. work_item_id: WI-XYZ\n"
+            prompt += "Metadata lines MUST include ALL of:\n"
+            prompt += "work_item_id: WI-AUTO-TUNE\n"
+            prompt += "producer_role: BUILDER\n"
+            prompt += "artifact_type: repo_patch\n"
+
             prompt += "File blocks MUST use: FILE: path (with colon)\n"
             prompt += "Every FILE block MUST have <<< and >>>.\n"
             prompt += "No markdown fences. No prose.\n"
         parts = _call_bundle(prompt, out_dir / ("gen_try_" + str(k)))
+        parts = [_sanitize_bundle_text(p) for p in parts]
         try:
             patch = parse_bundle_parts(parts)
             return (patch, parts, "")
@@ -129,6 +157,51 @@ def _summarize_logs(logs_text: str) -> str:
     out.extend(hits)
     out.append("DISCREPANCIES_END")
     return "\n".join(out) + "\n"
+
+def _infer_inputs_from_workflow(worktree_dir: Path, workflow_file: str) -> dict:
+    # Best-effort: detect required workflow_dispatch inputs and provide defaults where possible.
+    # No external YAML dependency; heuristic scan.
+    p = worktree_dir / ".github" / "workflows" / workflow_file
+    if not p.exists():
+        return {}
+    txt = p.read_text(encoding="utf-8", errors="ignore")
+    lines = txt.splitlines()
+    in_inputs = False
+    cur_key = ""
+    required = {}
+    defaults = {}
+    for raw in lines:
+        line = raw.rstrip("\n")
+        if re.match(r"^\s*workflow_dispatch\s*:\s*$", line):
+            continue
+        if re.match(r"^\s*inputs\s*:\s*$", line):
+            in_inputs = True
+            continue
+        if in_inputs and re.match(r"^\s*\w[\w-]*\s*:\s*$", line):
+            cur_key = line.strip().split(":",1)[0]
+            continue
+        if in_inputs and cur_key:
+            mreq = re.match(r"^\s*required\s*:\s*(true|false)\s*$", line.strip())
+            if "required:" in line:
+                v = line.split(":",1)[1].strip().lower()
+                required[cur_key] = (v == "true")
+            if "default:" in line:
+                v = line.split(":",1)[1].strip().strip('"').strip("'")
+                defaults[cur_key] = v
+        # stop when leaving inputs (next top-level key)
+        if in_inputs and re.match(r"^\S", line) and not line.startswith("on:"):
+            # heuristic break at new top-level key
+            if not line.startswith("  "):
+                in_inputs = False
+                cur_key = ""
+    out = {}
+    for k, req in required.items():
+        if req:
+            if k in defaults:
+                out[k] = defaults[k]
+            elif k == "issue_number":
+                out[k] = os.environ.get("FD_DEFAULT_ISSUE_NUMBER","4")
+    return out
 
 def _parse_inputs(s: str) -> dict:
     out = {}
@@ -221,6 +294,11 @@ def main() -> int:
             if not inputs:
                 _print_step("warn_empty_workflow_inputs workflow_file=" + workflow_file)
                 _write(artifacts / ("attempt_" + str(attempt) + "_inputs_empty.txt"), "workflow_inputs empty\n")
+                inferred = _infer_inputs_from_workflow(Path(wt_dir), workflow_file)
+                if inferred:
+                    inputs.update(inferred)
+                    _print_step("inputs_inferred " + str(inputs))
+                    _write(artifacts / ("attempt_" + str(attempt) + "_inputs_inferred.txt"), str(inputs) + "\n")
             start_epoch = time.time()
             _write(artifacts / ("attempt_" + str(attempt) + "_dispatch.txt"), "branch=" + branch + "\nworkflow_file=" + workflow_file + "\ninputs=" + str(inputs) + "\n")
             print("FD_STEP: dispatch_workflow file=" + workflow_file + " ref=" + branch + " inputs=" + str(inputs))
@@ -265,6 +343,11 @@ def main() -> int:
             prompt += "WORKFLOW_FILE=" + workflow_file + "\n"
             prompt += "OUTPUT: FD_BUNDLE_V1 PART 1/Y only. No prose.\n"
             prompt += "FORMAT RULES:\n"
+            prompt += "META REQUIRED:\n"
+            prompt += "work_item_id: WI-AUTO-TUNE\n"
+            prompt += "producer_role: BUILDER\n"
+            prompt += "artifact_type: repo_patch\n"
+
             prompt += "- First line must be: FD_BUNDLE_V1 PART 1/Y\n"
             prompt += "- Metadata lines must be key: value\n"
             prompt += "- File blocks must be: FILE: path (with colon) then <<< then content then >>>\n"
