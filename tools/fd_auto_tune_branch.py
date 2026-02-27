@@ -135,6 +135,7 @@ def main() -> int:
     _set_origin_with_token(repo_root, token)
 
     inputs = _parse_inputs(workflow_inputs)
+    apply_err = ""
 
     for attempt in range(1, max_attempts + 1):
         _step("attempt_begin " + str(attempt) + "/" + str(max_attempts))
@@ -179,7 +180,12 @@ def main() -> int:
 
             prompt = ""
             prompt += "You are fixing a GitHub repo so that a workflow passes.\n"
-            prompt += "Return ONLY a unified diff (git apply format), starting with: diff --git\n"
+            prompt += "Return ONLY a unified diff that `git apply` can apply. Start with: diff --git\n"
+            prompt += "REQUIREMENTS:\n"
+            prompt += "- Use minimal hunks (like --unified=0). Avoid including blank context lines.\n"
+            prompt += "- Hunk headers (@@ -a,b +c,d @@) must match the number of following +/-/space lines.\n"
+            prompt += "- Do not include prose or markdown fences.\n"
+
             prompt += "Do not include markdown fences. Do not include explanations.\n"
             prompt += "\nTARGET\n"
             prompt += "branch: " + branch + "\n"
@@ -190,6 +196,8 @@ def main() -> int:
             prompt += "conclusion: " + conclusion + "\n"
             prompt += "\nWORKFLOW_LOGS\n"
             prompt += logs_text[:300000] + "\n"
+            if apply_err.strip() != "":
+                prompt += "\nPREVIOUS_GIT_APPLY_ERROR\n" + apply_err + "\n"
             prompt += "\nRUN_ARTIFACTS\n"
             prompt += str([str(x.get("name") or "") for x in arts]) + "\n"
 
@@ -207,6 +215,7 @@ def main() -> int:
             app = _run(["git","apply","--whitespace=nowarn","--reject", str(diff_path)], str(wt_dir))
             _write(artifacts / ("git_apply_attempt_" + str(attempt) + ".log"), app.stdout)
             if app.returncode != 0:
+                apply_err = app.stdout[:4000]
                 _step("git_apply_failed attempt=" + str(attempt))
                 continue
             _step("git_apply_ok attempt=" + str(attempt))
@@ -222,6 +231,7 @@ def main() -> int:
                 _step("git_push_failed attempt=" + str(attempt))
                 continue
             _step("git_push_ok attempt=" + str(attempt))
+            apply_err = ""
         except Exception:
             _write(artifacts / ("unexpected_exception_attempt_" + str(attempt) + ".txt"), traceback.format_exc() + "\n")
             _step("attempt_exception attempt=" + str(attempt))
