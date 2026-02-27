@@ -220,6 +220,8 @@ def main() -> int:
             logs_text = extract_logs_text(logs_zip, max_chars=250000)
             _write(artifacts / ("run_" + str(run_id) + "_attempt_" + str(attempt) + ".log"), logs_text)
             summary = ""
+            status = str(run_info.get("status") or "")
+            conclusion = str(run_info.get("conclusion") or "")
             summary += "RUN_ID=" + str(run_id) + "\n"
             summary += "STATUS=" + status + "\n"
             summary += "CONCLUSION=" + conclusion + "\n"
