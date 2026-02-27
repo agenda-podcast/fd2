@@ -367,7 +367,7 @@ def main() -> int:
             _write(diff_path, diff)
 
             # Apply diff in worktree
-            app = _run(["git","apply","--3way","--whitespace=nowarn","--reject", str(diff_path)], str(wt_dir))
+            app = _run(["git","apply","--3way","--whitespace=nowarn", str(diff_path)], str(wt_dir))
             _write(artifacts / ("git_apply_attempt_" + str(attempt) + ".log"), app.stdout)
             if app.returncode != 0:
                 apply_err = app.stdout[:4000]
