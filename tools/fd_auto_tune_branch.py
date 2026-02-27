@@ -194,7 +194,11 @@ def main() -> int:
         print("FD_DEBUG: attempt_begin " + str(attempt) + "/" + str(max_attempts))
         try:
             # Create snapshot if missing
-            subprocess.check_call([sys.executable, os.path.join(repo_root, "tools", "fd_auto_make_snapshot.py")], cwd=str(wt_dir))
+            snap_dir_local = os.path.join(str(wt_dir), "docs", "assets", "app")
+            os.makedirs(snap_dir_local, exist_ok=True)
+            snaps0 = sorted(glob.glob(os.path.join(snap_dir_local, "app-source_*.txt")))
+            if not snaps0:
+                subprocess.check_call([sys.executable, os.path.join(repo_root, "tools", "fd_auto_make_snapshot.py")], cwd=str(wt_dir))
             # Commit snapshot so it is visible in the target branch history.
             st0 = _run(["git","status","--porcelain"], str(wt_dir))
             _write(artifacts / ("snapshot_git_status_attempt_" + str(attempt) + ".txt"), st0.stdout)
@@ -214,6 +218,9 @@ def main() -> int:
 
             # Dispatch workflow on the branch and collect logs
             inputs = _parse_inputs(workflow_inputs)
+            if not inputs:
+                _print_step("warn_empty_workflow_inputs workflow_file=" + workflow_file)
+                _write(artifacts / ("attempt_" + str(attempt) + "_inputs_empty.txt"), "workflow_inputs empty\n")
             start_epoch = time.time()
             _write(artifacts / ("attempt_" + str(attempt) + "_dispatch.txt"), "branch=" + branch + "\nworkflow_file=" + workflow_file + "\ninputs=" + str(inputs) + "\n")
             print("FD_STEP: dispatch_workflow file=" + workflow_file + " ref=" + branch + " inputs=" + str(inputs))
@@ -264,7 +271,10 @@ def main() -> int:
             prompt += "- Close every FILE block with >>>\n"
             prompt += "- Do NOT output markdown fences\n"
             prompt += "You MUST include an updated snapshot file: docs/assets/app/app-source_<timestamp>.txt\n"
-            prompt += "\nWORKFLOW_LOGS\n" + logs_text[:200000] + "\n"
+            summary_text = _summarize_logs(logs_text)
+            _write(artifacts / ("attempt_" + str(attempt) + "_workflow_summary.txt"), summary_text)
+            prompt += "\nWORKFLOW_LOGS_SUMMARY\n" + summary_text[:120000] + "\n"
+            prompt += "\nWORKFLOW_LOGS_RAW\n" + logs_text[:200000] + "\n"
             _write(artifacts / ("fix_prompt_attempt_" + str(attempt) + ".txt"), prompt)
 
             print("FD_STEP: gemini_fix_request_begin attempt=" + str(attempt))
@@ -274,6 +284,7 @@ def main() -> int:
             print("FD_STEP: gemini_fix_request_end attempt=" + str(attempt) + " ok=" + ("1" if patch is not None else "0"))
             if patch is None:
                 _write(artifacts / ("fix_parse_failed_attempt_" + str(attempt) + ".txt"), perr + "\n")
+                _print_step("fix_parse_failed attempt=" + str(attempt) + " err=" + perr[:160].replace("\n"," "))
                 continue
 
             apply_patch(patch, str(wt_dir))
