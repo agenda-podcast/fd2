@@ -291,6 +291,8 @@ def main() -> int:
 
         except Exception:
             _write(artifacts / ("unexpected_exception_attempt_" + str(attempt) + ".txt"), traceback.format_exc() + "\n")
+            print("FD_WARN: attempt_exception attempt=" + str(attempt))
+            print(traceback.format_exc())
             continue
 
     print("FD_FAIL: tuning attempts exhausted")
