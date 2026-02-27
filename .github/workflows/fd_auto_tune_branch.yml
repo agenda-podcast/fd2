@@ -52,6 +52,7 @@ jobs:
           python3 tools/fd_auto_tune_branch.py "${{ github.event.inputs.branch }}" "${{ github.event.inputs.workflow_file }}" "${{ github.event.inputs.max_attempts }}" "${{ github.event.inputs.workflow_inputs }}"
 
       - name: Upload artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: fd-auto-tune

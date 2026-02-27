@@ -25,9 +25,17 @@ def _write(p: Path, s: str) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(s, encoding="utf-8", errors="ignore")
 
+def _gemini_call_logged(prompt: str, label: str, artifacts: Path) -> str:
+    print("FD_STEP: gemini_call_begin label=" + label + " prompt_chars=" + str(len(prompt)))
+    _write(artifacts / (label + "_prompt.txt"), prompt)
+    resp = call_gemini(prompt, timeout_s=900)
+    print("FD_STEP: gemini_call_end label=" + label + " resp_chars=" + str(len(resp)))
+    _write(artifacts / (label + "_response.txt"), resp)
+    return resp
+
 def _call_bundle(prompt: str, out_dir: Path) -> list[str]:
     parts = []
-    first = call_gemini(prompt, timeout_s=900)
+    first = _gemini_call_logged(prompt, out_dir.name + "_part_1", out_dir)
     parts.append(first)
     _write(out_dir / "part_1.txt", first)
     x, y = bundle_total_parts(first)
@@ -37,7 +45,7 @@ def _call_bundle(prompt: str, out_dir: Path) -> list[str]:
     while cur < y and cur < 8:
         cur += 1
         cont = prompt + "\n\nCONTINUE\nReturn ONLY: FD_BUNDLE_V1 PART " + str(cur) + "/" + str(y) + "\nDo not repeat earlier parts.\n"
-        nxt = call_gemini(cont, timeout_s=900)
+        nxt = _gemini_call_logged(cont, out_dir.name + "_part_" + str(cur), out_dir)
         parts.append(nxt)
         _write(out_dir / ("part_" + str(cur) + ".txt"), nxt)
     _write(out_dir / "bundle_full.txt", "\n\n".join(parts))
@@ -63,7 +71,9 @@ def _upload_snapshot_chunks(snapshot_text: str, out_dir: Path) -> None:
         prompt += "SNAPSHOT_CHUNK " + str(i+1) + "/" + str(total) + "\n"
         prompt += chunk + "\n"
         _write(out_dir / ("snapshot_chunk_" + str(i+1) + "_prompt.txt"), prompt)
-        resp = call_gemini(prompt, timeout_s=900)
+        resp = _gemini_call_logged(prompt, out_dir.name + "_snapshot_ack_" + str(i+1), out_dir)
+        if ("ACK " + str(i+1) + "/" + str(total)) not in resp:
+            print("FD_WARN: snapshot_ack_unexpected chunk=" + str(i+1) + "/" + str(total) + " resp_head=" + resp[:80].replace("\n"," "))
         _write(out_dir / ("snapshot_chunk_" + str(i+1) + "_response.txt"), resp)
 
 def _get_fix_bundle_and_parse(base_prompt: str, out_dir: Path, max_tries: int = 3):
@@ -179,14 +189,33 @@ def main() -> int:
         try:
             # Create snapshot if missing
             subprocess.check_call([sys.executable, os.path.join(repo_root, "tools", "fd_auto_make_snapshot.py")], cwd=str(wt_dir))
+            # Commit snapshot so it is visible in the target branch history.
+            st0 = _run(["git","status","--porcelain"], str(wt_dir))
+            _write(artifacts / ("snapshot_git_status_attempt_" + str(attempt) + ".txt"), st0.stdout)
+            if st0.stdout.strip() != "":
+                subprocess.check_call(["git","add","docs/assets/app/app-source_*.txt"], cwd=str(wt_dir))
+                try:
+                    subprocess.check_call(["git","commit","-m","FD snapshot attempt " + str(attempt)], cwd=str(wt_dir))
+                except Exception:
+                    pass
+                push0 = _run(["git","push","--force-with-lease"], str(wt_dir))
+                _write(artifacts / ("snapshot_git_push_attempt_" + str(attempt) + ".txt"), push0.stdout)
+                if push0.returncode != 0:
+                    print("FD_WARN: snapshot_push_failed rc=" + str(push0.returncode))
+                    raise RuntimeError("FD_FAIL: snapshot push failed")
+                print("FD_STEP: snapshot_commit_push_done")
+
 
             # Dispatch workflow on the branch and collect logs
             inputs = _parse_inputs(workflow_inputs)
             start_epoch = time.time()
             _write(artifacts / ("attempt_" + str(attempt) + "_dispatch.txt"), "branch=" + branch + "\nworkflow_file=" + workflow_file + "\ninputs=" + str(inputs) + "\n")
+            print("FD_STEP: dispatch_workflow file=" + workflow_file + " ref=" + branch + " inputs=" + str(inputs))
             dispatch_workflow(workflow_file, branch, inputs, token)
             run_id = find_latest_run_id(workflow_file, branch, start_epoch - 5, token, timeout_s=180)
+            print("FD_STEP: workflow_run_found run_id=" + str(run_id))
             run_info = wait_run_complete(run_id, token, timeout_s=3600)
+            print("FD_STEP: workflow_run_completed run_id=" + str(run_id) + " status=" + str(run_info.get("status")) + " conclusion=" + str(run_info.get("conclusion")))
             logs_zip = download_run_logs_zip(run_id, token)
             logs_text = extract_logs_text(logs_zip, max_chars=250000)
             _write(artifacts / ("run_" + str(run_id) + "_attempt_" + str(attempt) + ".log"), logs_text)
@@ -225,12 +254,15 @@ def main() -> int:
             prompt += "\nWORKFLOW_LOGS\n" + logs_text[:200000] + "\n"
             _write(artifacts / ("fix_prompt_attempt_" + str(attempt) + ".txt"), prompt)
 
+            print("FD_STEP: gemini_fix_request_begin attempt=" + str(attempt))
             patch, parts, perr = _get_fix_bundle_and_parse(prompt, artifacts / ("fix_bundle_attempt_" + str(attempt)), max_tries=3)
+            print("FD_STEP: gemini_fix_request_end attempt=" + str(attempt) + " ok=" + ("1" if patch is not None else "0"))
             if patch is None:
                 _write(artifacts / ("fix_parse_failed_attempt_" + str(attempt) + ".txt"), perr + "\n")
                 continue
 
             apply_patch(patch, str(wt_dir))
+            print("FD_STEP: apply_patch_done")
 
             # Apply returned snapshot (slice into files)
             snap_dir = wt_dir / "docs" / "assets" / "app"
@@ -239,6 +271,7 @@ def main() -> int:
                 newest = snaps[-1]
                 txt = Path(newest).read_text(encoding="utf-8", errors="ignore")
                 apply_snapshot(txt, wt_dir)
+                print("FD_STEP: apply_snapshot_done file=" + newest)
 
             subprocess.check_call(["git","add","-A"], cwd=str(wt_dir))
             st = _run(["git","status","--porcelain"], str(wt_dir))
@@ -246,12 +279,15 @@ def main() -> int:
 
             try:
                 subprocess.check_call(["git","commit","-m","FD tune attempt " + str(attempt)], cwd=str(wt_dir))
+                print("FD_STEP: git_commit_done")
             except Exception:
                 pass
             pushr = _run(["git","push","--force-with-lease"], str(wt_dir))
             _write(artifacts / ("git_push_attempt_" + str(attempt) + ".txt"), pushr.stdout)
             if pushr.returncode != 0:
+                print("FD_WARN: git_push_failed rc=" + str(pushr.returncode))
                 raise RuntimeError("FD_FAIL: git push failed")
+            print("FD_STEP: git_push_done")
 
         except Exception:
             _write(artifacts / ("unexpected_exception_attempt_" + str(attempt) + ".txt"), traceback.format_exc() + "\n")
