@@ -57,9 +57,7 @@ def main() -> int:
     _write(artifacts / "milestone_issue.txt", body)
 
     # 1) Plan (PM): FD_PATCH_V1 handoff-only
-    pm_prompt = open("agent_guides/ROLE_PM.txt","r",encoding="utf-8",errors="ignore").read() if os.path.exists("agent_guides/ROLE_PM.txt") else "ROLE: PM
-Output FD_PATCH_V1 with handoff files only.
-"
+    pm_prompt = open("agent_guides/ROLE_PM.txt","r",encoding="utf-8",errors="ignore").read() if os.path.exists("agent_guides/ROLE_PM.txt") else "ROLE: PM\nOutput FD_PATCH_V1 with handoff files only.\n"
     plan_prompt = pm_prompt + "\n\nMILESTONE_TITLE\n" + title + "\n\nMILESTONE_BODY\n" + body + "\n"
     _write(artifacts / "plan_prompt.txt", plan_prompt)
 
