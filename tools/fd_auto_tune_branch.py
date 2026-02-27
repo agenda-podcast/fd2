@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import traceback
+import re
 import time
 from pathlib import Path
 
