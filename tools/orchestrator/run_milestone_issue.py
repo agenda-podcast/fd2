@@ -5,6 +5,7 @@ import os
 import shutil
 import sys
 import tempfile
+from pathlib import Path
 
 sys.dont_write_bytecode = True
 
@@ -150,6 +151,8 @@ def main() -> int:
     os.environ["FD_GEMINI_MAX_OUTPUT_TOKENS"] = "0"
     os.environ["FD_GEMINI_THINKING_BUDGET"] = "0"
     os.environ["FD_GEMINI_RETRIES"] = "2"
+    artifacts_dir = Path(tempfile.mkdtemp(prefix="fd_ms_artifacts_"))
+    print("FD_DEBUG: ms_artifacts_dir=" + str(artifacts_dir))
     last_err = ""
     out_text = ""
     manifest = None
@@ -173,12 +176,12 @@ def main() -> int:
             continue
     if manifest is None:
         now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%S")
-    rel_tag_fail = "FD-FAIL-" + ms_id + "-PM-" + now
-    fail_report = artifacts_dir / "failure_report.txt"
-    fail_report.write_text("FD_MS_FAILED\nMS=" + ms_id + "\nERROR=" + last_err + "\n", encoding="utf-8")
-    attempt_files = sorted(glob.glob(str(artifacts_dir / "attempt_*")))
-    gh_release_create(rel_tag_fail, "MS FAILED " + ms_id, "FD milestone failure artifact", [str(fail_report)] + attempt_files)
-    die("FD_FAIL: milestone execution failed after 3 attempts: " + last_err)
+        rel_tag_fail = "FD-FAIL-" + ms_id + "-PM-" + now
+        fail_report = artifacts_dir / "failure_report.txt"
+        fail_report.write_text("FD_MS_FAILED\\nMS=" + ms_id + "\\nERROR=" + last_err + "\\n", encoding="utf-8")
+        attempt_files = sorted(glob.glob(str(artifacts_dir / "attempt_*")))
+        gh_release_create(rel_tag_fail, "MS FAILED " + ms_id, "FD milestone failure artifact", [str(fail_report)] + attempt_files)
+        die("FD_FAIL: milestone execution failed after 3 attempts: " + last_err)
 
     if manifest.work_item_id != ms_id:
         sys.stdout.write(
