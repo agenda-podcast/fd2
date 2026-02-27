@@ -101,7 +101,10 @@ def _extract_diff(text: str) -> str:
     t = (text or "").replace("\r\n","\n").replace("\r","\n")
     idx = t.find("diff --git")
     if idx >= 0:
-        return t[idx:]
+        d = t[idx:]
+        if not d.endswith("\n"):
+            d = d + "\n"
+        return d
     # sometimes model returns '*** Begin Patch' - keep as fail if no diff.
     return ""
 
@@ -209,6 +212,8 @@ def main() -> int:
                 continue
 
             diff_path = artifacts / ("fix_attempt_" + str(attempt) + ".diff")
+            if not diff.endswith("\n"):
+                diff = diff + "\n"
             _write(diff_path, diff)
 
             # Apply diff in worktree
