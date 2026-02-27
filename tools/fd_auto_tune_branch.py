@@ -88,6 +88,33 @@ def _get_fix_bundle_and_parse(base_prompt: str, out_dir: Path, max_tries: int = 
             continue
     return (None, [], last_err)
 
+def _summarize_logs(logs_text: str) -> str:
+    if not logs_text:
+        return ""
+    lines = logs_text.splitlines()
+    patterns = ["Error:", "ERROR", "Traceback", "Exception", "FAILED", "Failure", "FD_FAIL", "FD_POLICY_FAIL", "UnboundLocalError", "ModuleNotFoundError"]
+    hits = []
+    for i, line in enumerate(lines):
+        for p in patterns:
+            if p in line:
+                start = max(0, i - 2)
+                end = min(len(lines), i + 3)
+                snippet = "\n".join(lines[start:end])
+                hits.append("----\nline=" + str(i+1) + "\n" + snippet)
+                break
+        if len(hits) >= 40:
+            break
+    head = "\n".join(lines[:120])
+    out = []
+    out.append("LOG_HEAD_BEGIN")
+    out.append(head)
+    out.append("LOG_HEAD_END")
+    out.append("")
+    out.append("DISCREPANCIES_BEGIN")
+    out.extend(hits)
+    out.append("DISCREPANCIES_END")
+    return "\n".join(out) + "\n"
+
 def _parse_inputs(s: str) -> dict:
     out = {}
     for line in (s or "").splitlines():
@@ -99,6 +126,13 @@ def _parse_inputs(s: str) -> dict:
         k, v = t.split("=", 1)
         out[k.strip()] = v.strip()
     return out
+
+def _set_origin_with_token(repo_root: Path, token: str) -> None:
+    repo = (os.environ.get("GITHUB_REPOSITORY") or "").strip()
+    if repo == "":
+        raise RuntimeError("FD_FAIL: missing GITHUB_REPOSITORY")
+    remote_url = "https://x-access-token:" + token + "@github.com/" + repo + ".git"
+    subprocess.check_call(["git","remote","set-url","origin",remote_url], cwd=str(repo_root))
 
 def _ensure_worktree(branch: str) -> tuple[Path, str]:
     repo_root = Path(os.getcwd())
@@ -138,22 +172,33 @@ def main() -> int:
     _write(artifacts / "workflow_inputs.txt", workflow_inputs + "\n")
 
     wt_dir, repo_root = _ensure_worktree(branch)
+    _set_origin_with_token(Path(repo_root), token)
 
     for attempt in range(1, max_attempts + 1):
         print("FD_DEBUG: attempt_begin " + str(attempt) + "/" + str(max_attempts))
         try:
             # Create snapshot if missing
-            subprocess.check_call(["python3","tools/fd_auto_make_snapshot.py"], cwd=str(wt_dir))
+            subprocess.check_call([sys.executable, os.path.join(repo_root, "tools", "fd_auto_make_snapshot.py")], cwd=str(wt_dir))
 
             # Dispatch workflow on the branch and collect logs
             inputs = _parse_inputs(workflow_inputs)
             start_epoch = time.time()
+            _write(artifacts / ("attempt_" + str(attempt) + "_dispatch.txt"), "branch=" + branch + "\nworkflow_file=" + workflow_file + "\ninputs=" + str(inputs) + "\n")
             dispatch_workflow(workflow_file, branch, inputs, token)
             run_id = find_latest_run_id(workflow_file, branch, start_epoch - 5, token, timeout_s=180)
             run_info = wait_run_complete(run_id, token, timeout_s=3600)
             logs_zip = download_run_logs_zip(run_id, token)
             logs_text = extract_logs_text(logs_zip, max_chars=250000)
             _write(artifacts / ("run_" + str(run_id) + "_attempt_" + str(attempt) + ".log"), logs_text)
+            summary = ""
+            summary += "RUN_ID=" + str(run_id) + "\n"
+            summary += "STATUS=" + status + "\n"
+            summary += "CONCLUSION=" + conclusion + "\n"
+            html_url = str(run_info.get("html_url") or "")
+            if html_url:
+                summary += "URL=" + html_url + "\n"
+            summary += "\n" + _summarize_logs(logs_text)
+            _write(artifacts / ("attempt_" + str(attempt) + "_workflow_summary.txt"), summary)
 
             status = str(run_info.get("status") or "")
             conclusion = str(run_info.get("conclusion") or "")
@@ -162,6 +207,7 @@ def main() -> int:
                 return 0
 
             snapshot_text = _read_latest_snapshot(wt_dir)
+            _write(artifacts / ("snapshot_path_attempt_" + str(attempt) + ".txt"), "exists=" + ("1" if snapshot_text.strip() else "0") + "\n")
             _upload_snapshot_chunks(snapshot_text, artifacts / ("snapshot_upload_attempt_" + str(attempt)))
 
             prompt = ""
@@ -195,11 +241,18 @@ def main() -> int:
                 apply_snapshot(txt, wt_dir)
 
             subprocess.check_call(["git","add","-A"], cwd=str(wt_dir))
+            st = _run(["git","status","--porcelain"], str(wt_dir))
+            _write(artifacts / ("git_status_attempt_" + str(attempt) + ".txt"), st.stdout)
+
             try:
                 subprocess.check_call(["git","commit","-m","FD tune attempt " + str(attempt)], cwd=str(wt_dir))
             except Exception:
                 pass
-            subprocess.check_call(["git","push","--force-with-lease"], cwd=str(wt_dir))
+            pushr = _run(["git","push","--force-with-lease"], str(wt_dir))
+            _write(artifacts / ("git_push_attempt_" + str(attempt) + ".txt"), pushr.stdout)
+            if pushr.returncode != 0:
+                raise RuntimeError("FD_FAIL: git push failed")
+
         except Exception:
             _write(artifacts / ("unexpected_exception_attempt_" + str(attempt) + ".txt"), traceback.format_exc() + "\n")
             continue
