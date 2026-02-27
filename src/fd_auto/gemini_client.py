@@ -29,7 +29,7 @@ def call_gemini(prompt: str, timeout_s: int = 900) -> str:
     url = _endpoint(base, model)
 
     retries = _env_int("FD_GEMINI_RETRIES", 2)
-    think_budget = _env_int("FD_GEMINI_THINKING_BUDGET", 0)
+    think_budget = _env_int("FD_GEMINI_THINKING_BUDGET", 1024)
     max_out = _env_int("FD_GEMINI_MAX_OUTPUT_TOKENS", 0)  # 0 => omit
     resp_mime = (os.environ.get("FD_GEMINI_RESPONSE_MIME") or "text/plain").strip()
 
@@ -37,7 +37,7 @@ def call_gemini(prompt: str, timeout_s: int = 900) -> str:
         gen = {
             "temperature": 0.2,
             "responseMimeType": resp_mime,
-            "thinkingConfig": {"includeThoughts": False, "thinkingBudget": think_budget},
+            "thinkingConfig": {"includeThoughts": False, "thinkingBudget": (think_budget if think_budget > 0 else 1)},
         }
         if max_out > 0:
             gen["maxOutputTokens"] = max_out

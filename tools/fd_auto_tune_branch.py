@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.abspath(os.getcwd()))
 from src.fd_auto.gemini_client import call_gemini
 from src.fd_auto.patch_parse import parse_bundle_parts, bundle_total_parts
 from src.fd_auto.apply_patch import apply_patch
-from src.fd_auto.util import require_env, first_n_lines
+from src.fd_auto.util import first_n_lines
 
 def _run(cmd, cwd):
     return subprocess.run(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
@@ -41,16 +41,17 @@ def _call_bundle(prompt: str, out_dir: Path) -> list[str]:
 
 def main() -> int:
     import sys
-    if len(sys.argv) < 2:
-        print("usage: fd_auto_tune_branch.py <branch>")
+    if len(sys.argv) < 4:
+        print("usage: fd_auto_tune_branch.py <branch> <workflow_name> <max_attempts>")
         return 2
     branch = sys.argv[1].strip()
+    workflow_name = sys.argv[2].strip() or "dry_run_and_unittest"
+    max_attempts_arg = int((sys.argv[3].strip() or "3"))
     if branch == "":
         return 2
 
     repo_root = os.getcwd()
-    require_env("FD_BOT_TOKEN")  # ensures configured
-    max_attempts = int(os.environ.get("FD_TUNE_MAX_ATTEMPTS","3") or "3")
+    max_attempts = max_attempts_arg
 
     artifacts = Path(tempfile.mkdtemp(prefix="fd_tune_artifacts_"))
     _write(artifacts / "branch.txt", branch + "\n")
@@ -62,17 +63,33 @@ def main() -> int:
         if Path("requirements.txt").exists():
             _run([sys.executable,"-m","pip","install","-r","requirements.txt"], repo_root)
 
-        dry = _run(["python","src/main.py","--dry-run"], repo_root)
-        _write(artifacts / ("dry_run_attempt_" + str(attempt) + ".log"), dry.stdout)
-        tests = _run(["python","-m","unittest","discover","-s","tests"], repo_root)
-        _write(artifacts / ("tests_attempt_" + str(attempt) + ".log"), tests.stdout)
+        dry = None
+        tests = None
+        if workflow_name == "dry_run_only":
+            dry = _run(["python","src/main.py","--dry-run"], repo_root)
+            _write(artifacts / ("dry_run_attempt_" + str(attempt) + ".log"), dry.stdout)
+            ok = (dry.returncode == 0)
+        elif workflow_name == "unittest_only":
+            tests = _run(["python","-m","unittest","discover","-s","tests"], repo_root)
+            _write(artifacts / ("tests_attempt_" + str(attempt) + ".log"), tests.stdout)
+            ok = (tests.returncode == 0)
+        else:
+            dry = _run(["python","src/main.py","--dry-run"], repo_root)
+            _write(artifacts / ("dry_run_attempt_" + str(attempt) + ".log"), dry.stdout)
+            tests = _run(["python","-m","unittest","discover","-s","tests"], repo_root)
+            _write(artifacts / ("tests_attempt_" + str(attempt) + ".log"), tests.stdout)
+            ok = (dry.returncode == 0 and tests.returncode == 0)
 
-        if dry.returncode == 0 and tests.returncode == 0:
+        if ok:
             print("FD_OK: green")
             return 0
 
         # Ask Gemini for patch
-        failing = "DRY_RUN_RC=" + str(dry.returncode) + "\n" + first_n_lines(dry.stdout, 200) + "\n\nTEST_RC=" + str(tests.returncode) + "\n" + first_n_lines(tests.stdout, 200)
+        dry_rc = str(dry.returncode) if dry is not None else "NA"
+        dry_out = first_n_lines(dry.stdout, 200) if dry is not None else ""
+        test_rc = str(tests.returncode) if tests is not None else "NA"
+        test_out = first_n_lines(tests.stdout, 200) if tests is not None else ""
+        failing = "WORKFLOW_NAME=" + workflow_name + "\nDRY_RUN_RC=" + dry_rc + "\n" + dry_out + "\n\nTEST_RC=" + test_rc + "\n" + test_out
         prompt = ""
         prompt += "ROLE: BUILDER\n"
         prompt += "TASK: Fix the application to make dry-run and unit tests pass.\n"
@@ -89,7 +106,6 @@ def main() -> int:
         except Exception:
             pass
         subprocess.check_call(["git","push","--force-with-lease"])
-
     print("FD_FAIL: tuning attempts exhausted")
     return 1
 
