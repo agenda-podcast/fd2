@@ -38,7 +38,7 @@ def _milestone_enforcement_block(attempt: int, last_err: str) -> str:
     lines.append("This is attempt " + str(attempt) + " of 3.")
     if last_err.strip() != "":
         lines.append("Previous attempt failed with: " + last_err.strip())
-    lines.append("Return valid JSON ONLY. No markdown. No code fences.")
+    lines.append("Return FD_PATCH_V1 ONLY. No markdown. No code fences. Do NOT use three dots anywhere.")
     lines.append("All JSON strings must be properly escaped. No trailing commas.")
     lines.append("Keep the output small enough to fit model output limits.")
     lines.append("Write exactly 5 files: milestone_v1.md and 4 WI files.")
@@ -48,9 +48,8 @@ def _milestone_enforcement_block(attempt: int, last_err: str) -> str:
     return "\n".join(lines)
 
 
-def run_policy_checks(repo_root: str) -> None:
+def run_policy_checks(repo_root: str) -> tuple[bool, str]:
     cwd = os.getcwd()
-    # Remove runtime bytecode artifacts to keep policy checks deterministic
     for dirpath, dirnames, filenames in os.walk(repo_root):
         if "__pycache__" in dirnames:
             shutil.rmtree(os.path.join(dirpath, "__pycache__"), ignore_errors=True)
@@ -63,12 +62,12 @@ def run_policy_checks(repo_root: str) -> None:
     os.chdir(repo_root)
     try:
         if check_lines_run(repo_root) != 0:
-            die("FD_FAIL: policy line limits")
+            return (False, "FD_FAIL: policy line limits")
         if check_ellipses_run(repo_root) != 0:
-            die("FD_FAIL: policy ellipses")
+            return (False, "FD_FAIL: policy ellipses")
+        return (True, "")
     finally:
         os.chdir(cwd)
-
 
 def _extract_ms_id_from_title(title: str) -> str:
     # Accept formats like "MS-01" followed by text, or "MS-001" followed by text.
@@ -156,6 +155,7 @@ def main() -> int:
     last_err = ""
     out_text = ""
     manifest = None
+    manifest = None
     for attempt in range(1, 4):
         p = prompt
         if attempt > 1:
@@ -169,11 +169,25 @@ def main() -> int:
             last_err = "FD_FAIL: model returned empty output role=" + role + " model=" + model
             continue
         try:
-            manifest = load_manifest_from_text(out_text)
-            break
+            m = load_manifest_from_text(out_text)
         except Exception as exc:
-            last_err = "FD_FAIL: invalid manifest json: " + str(exc)
+            last_err = "FD_FAIL: invalid manifest: " + str(exc)
             continue
+        # Apply into a temp stage and run policy checks; retry on policy failure.
+        with tempfile.TemporaryDirectory() as tmp_attempt:
+            stage_attempt = os.path.join(tmp_attempt, "stage")
+            os.makedirs(stage_attempt, exist_ok=True)
+            try:
+                apply_manifest(m, stage_attempt)
+            except Exception as exc:
+                last_err = "FD_FAIL: apply_manifest failed: " + str(exc)
+                continue
+            ok, msg = run_policy_checks(stage_attempt)
+            if not ok:
+                last_err = msg
+                continue
+        manifest = m
+        break
     if manifest is None:
         now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%S")
         rel_tag_fail = "FD-FAIL-" + ms_id + "-PM-" + now
@@ -213,7 +227,9 @@ def main() -> int:
 
         # Stage starts empty. For milestone planning, we only package the produced handoff files.
         apply_manifest(manifest, stage)
-        run_policy_checks(stage)
+        ok, msg = run_policy_checks(stage)
+        if not ok:
+            die(msg)
 
         manifest_path = os.path.join(tmp, "manifest.json")
         write_json(manifest_path, {
