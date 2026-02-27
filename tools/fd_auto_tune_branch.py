@@ -426,6 +426,35 @@ def main() -> int:
                 apply_failed_context = "\n".join(ctx_parts)
                 _write(artifacts / ("git_apply_failed_context_attempt_" + str(attempt) + ".txt"), apply_failed_context)
                 _step("git_apply_failed attempt=" + str(attempt))
+                # Immediate fallback: request FILE bundle using apply error + current file context, so max_attempts=1 can still fix.
+                bprompt = ""
+                bprompt += "Return ONLY FILE bundle blocks. No prose.\n"
+                bprompt += "FORMAT:\nFILE: path\n<<<\n<content>\n>>>\n\n"
+                bprompt += "Change ONLY minimal files needed to fix the workflow failure.\n"
+                bprompt += "branch: " + branch + "\nworkflow_file: " + workflow_file + "\n"
+                bprompt += "\nWORKFLOW_LOGS_SUMMARY\n" + _summarize_logs_short(logs_text)[:FD_PROMPT_MAX_LOG_CHARS] + "\n"
+                bprompt += "\nPREVIOUS_GIT_APPLY_ERROR\n" + apply_err + "\n"
+                if apply_failed_context.strip() != "":
+                    bprompt += "\nCURRENT_FILE_CONTEXT\n" + apply_failed_context[:FD_PROMPT_MAX_CTX_CHARS] + "\n"
+                bundle_text = call_gemini(bprompt, timeout_s=900)
+                _write(artifacts / ("bundle_after_apply_fail_attempt_" + str(attempt) + "_response.txt"), bundle_text)
+                okb = False
+                try:
+                    okb = _apply_file_bundle(bundle_text, Path(wt_dir), artifacts, "bundle_after_apply_fail_attempt_" + str(attempt))
+                except Exception:
+                    okb = False
+                if okb:
+                    _step("bundle_after_apply_fail_ok attempt=" + str(attempt))
+                    subprocess.check_call(["git","add","-A"], cwd=str(wt_dir))
+                    try:
+                        subprocess.check_call(["git","commit","-m","FD tune bundle-after-apply-fail " + str(attempt)], cwd=str(wt_dir))
+                    except Exception:
+                        pass
+                    pushb = _run(["git","push","--force-with-lease"], str(wt_dir))
+                    _write(artifacts / ("git_push_bundle_after_apply_fail_attempt_" + str(attempt) + ".log"), pushb.stdout)
+                    if pushb.returncode == 0:
+                        _step("git_push_ok attempt=" + str(attempt))
+                        return 0
                 diff_fail_count += 1
                 continue
             _step("git_apply_ok attempt=" + str(attempt))
