@@ -111,3 +111,30 @@ def extract_logs_text(logs_zip: bytes, max_chars: int = 200000) -> str:
     if len(out) > max_chars:
         out = out[:max_chars]
     return out
+
+
+def list_workflows(token: str) -> List[Dict[str, Any]]:
+    repo = _repo()
+    url = f"https://api.github.com/repos/{repo}/actions/workflows?per_page=100"
+    data = _get_json(url, token)
+    wfs = data.get("workflows") if isinstance(data, dict) else None
+    if isinstance(wfs, list):
+        return [w for w in wfs if isinstance(w, dict)]
+    return []
+
+def resolve_workflow_file(user_value: str, token: str) -> str:
+    v = (user_value or "").strip()
+    if v.endswith(".yml") or v.endswith(".yaml"):
+        return v
+    if v.startswith(".github/workflows/"):
+        return v.replace(".github/workflows/","")
+    wfs = list_workflows(token)
+    for w in wfs:
+        if str(w.get("name") or "") == v:
+            p = str(w.get("path") or "")
+            return p.replace(".github/workflows/","")
+    for w in wfs:
+        p = str(w.get("path") or "")
+        if p.endswith("/" + v):
+            return v
+    return v

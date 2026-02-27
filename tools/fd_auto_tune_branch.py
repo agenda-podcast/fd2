@@ -11,7 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.abspath(os.getcwd()))
 
-from src.fd_auto.actions_api import dispatch_workflow, find_latest_run_id, wait_run_complete, download_run_logs_zip, extract_logs_text
+from src.fd_auto.actions_api import dispatch_workflow, find_latest_run_id, wait_run_complete, download_run_logs_zip, extract_logs_text, resolve_workflow_file
 from src.fd_auto.gemini_client import call_gemini
 from src.fd_auto.patch_parse import parse_bundle_parts, bundle_total_parts
 from src.fd_auto.apply_patch import apply_patch
@@ -164,7 +164,7 @@ def main() -> int:
         print("usage: fd_auto_tune_branch.py <branch> <workflow_file> <max_attempts> [workflow_inputs]")
         return 2
     branch = sys.argv[1].strip()
-    workflow_file = sys.argv[2].strip()
+    workflow_file_in = sys.argv[2].strip()
     max_attempts = int((sys.argv[3].strip() or "10"))
     workflow_inputs = sys.argv[4] if len(sys.argv) > 4 else ""
 
@@ -174,7 +174,8 @@ def main() -> int:
     if max_attempts < 1:
         max_attempts = 1
 
-    print("FD_DEBUG: tune_config branch=" + branch + " workflow_file=" + workflow_file + " max_attempts=" + str(max_attempts))
+    workflow_file = resolve_workflow_file(workflow_file_in, token)
+    print("FD_DEBUG: tune_config branch=" + branch + " workflow_file_in=" + workflow_file_in + " workflow_file=" + workflow_file + " max_attempts=" + str(max_attempts))
 
     artifacts = Path(tempfile.mkdtemp(prefix="fd_tune_artifacts_"))
     _write(artifacts / "branch.txt", branch + "\n")
@@ -211,12 +212,17 @@ def main() -> int:
             start_epoch = time.time()
             _write(artifacts / ("attempt_" + str(attempt) + "_dispatch.txt"), "branch=" + branch + "\nworkflow_file=" + workflow_file + "\ninputs=" + str(inputs) + "\n")
             print("FD_STEP: dispatch_workflow file=" + workflow_file + " ref=" + branch + " inputs=" + str(inputs))
+            _print_step("dispatch_workflow file=" + workflow_file + " ref=" + branch + " inputs=" + str(inputs))
             dispatch_workflow(workflow_file, branch, inputs, token)
             run_id = find_latest_run_id(workflow_file, branch, start_epoch - 5, token, timeout_s=180)
+            _print_step("workflow_run_found run_id=" + str(run_id))
             print("FD_STEP: workflow_run_found run_id=" + str(run_id))
             run_info = wait_run_complete(run_id, token, timeout_s=3600)
+            _print_step("workflow_run_completed run_id=" + str(run_id) + " conclusion=" + str(run_info.get("conclusion")))
             print("FD_STEP: workflow_run_completed run_id=" + str(run_id) + " status=" + str(run_info.get("status")) + " conclusion=" + str(run_info.get("conclusion")))
+            _print_step("download_logs_begin run_id=" + str(run_id))
             logs_zip = download_run_logs_zip(run_id, token)
+            _print_step("download_logs_end run_id=" + str(run_id) + " bytes=" + str(len(logs_zip)))
             logs_text = extract_logs_text(logs_zip, max_chars=250000)
             _write(artifacts / ("run_" + str(run_id) + "_attempt_" + str(attempt) + ".log"), logs_text)
             summary = ""
@@ -257,7 +263,9 @@ def main() -> int:
             _write(artifacts / ("fix_prompt_attempt_" + str(attempt) + ".txt"), prompt)
 
             print("FD_STEP: gemini_fix_request_begin attempt=" + str(attempt))
+            _print_step("gemini_fix_request_begin attempt=" + str(attempt))
             patch, parts, perr = _get_fix_bundle_and_parse(prompt, artifacts / ("fix_bundle_attempt_" + str(attempt)), max_tries=3)
+            _print_step("gemini_fix_request_end attempt=" + str(attempt) + " ok=" + ("1" if patch is not None else "0"))
             print("FD_STEP: gemini_fix_request_end attempt=" + str(attempt) + " ok=" + ("1" if patch is not None else "0"))
             if patch is None:
                 _write(artifacts / ("fix_parse_failed_attempt_" + str(attempt) + ".txt"), perr + "\n")
@@ -293,7 +301,7 @@ def main() -> int:
 
         except Exception:
             _write(artifacts / ("unexpected_exception_attempt_" + str(attempt) + ".txt"), traceback.format_exc() + "\n")
-            print("FD_WARN: attempt_exception attempt=" + str(attempt))
+            _print_step("attempt_exception attempt=" + str(attempt))
             print(traceback.format_exc())
             continue
 
