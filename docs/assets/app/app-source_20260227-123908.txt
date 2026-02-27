@@ -1,0 +1,1237 @@
+FD_APP_SOURCE_V1
+timestamp_utc: 20260227-123908
+root: /
+
+FILE: README_FD_AUTO.md
+<<<
+# FD Auto (Two-Flow)
+
+This drop-in adds two GitHub Actions workflows:
+
+1) Build App From Milestone Issue (Manual)
+- Input: issue_number (milestone issue)
+- Output: pushes a new app branch (default: app-<ms-id>-<UTC timestamp>)
+- Artifacts: plan + Gemini raw outputs + assembled app zip
+
+2) Tune App Branch (Manual)
+- Input: branch (app branch name)
+- Runs dry-run + unit tests.
+- If red, iterates: send failing logs + selected files to Gemini, receive a patch bundle, apply, commit, push.
+- Stops when green or max_attempts reached.
+- Artifacts: logs + Gemini prompts/outputs per attempt.
+
+Secrets required:
+- FD_BOT_TOKEN (PAT or GitHub App token with contents:write, issues:read, pull requests optional)
+- GEMINI_API_KEY
+Optional secrets:
+- GEMINI_MODEL (default: gemini-2.5-pro)
+- GEMINI_ENDPOINT_BASE (default: https://generativelanguage.googleapis.com/v1beta)
+
+Notes:
+- Workflows remain on main.
+- App branches do NOT need workflows; main workflow checks them out.
+
+>>>
+
+FILE: agent_guides/ROLE_PM.txt
+<<<
+ROLE: PM
+
+Output FD_PATCH_V1 only.
+Write ONLY these files:
+- handoff/app_building_plan.md
+- handoff/work_items/WI-001-code.md
+- handoff/work_items/WI-002-docs.md
+- handoff/work_items/WI-003-tests.md
+- handoff/work_items/WI-004-publish.md
+
+Do NOT write any files outside handoff/.
+
+
+>>>
+
+FILE: agent_guides/ROLE_BUILDER.txt
+<<<
+ROLE: BUILDER
+
+Output FD_BUNDLE_V1 PART 1/Y only.
+Then metadata lines:
+work_item_id: WI-001
+producer_role: BUILDER
+artifact_type: repo_patch
+
+Then FILE blocks with <<< and >>>.
+
+No prose. Close every FILE block. No ellipses.
+
+
+>>>
+
+FILE: docs/index.md
+<<<
+---
+layout: default
+title: FD2
+---
+
+# FD2
+
+This repository contains automation workflows and tooling.
+
+>>>
+
+FILE: src/__init__.py
+<<<
+
+
+>>>
+
+FILE: src/fd_auto/patch_parse.py
+<<<
+from typing import List, Tuple
+from dataclasses import dataclass
+
+@dataclass
+class FileEntry:
+    path: str
+    content: str
+
+@dataclass
+class Patch:
+    kind: str  # patch | bundle
+    work_item_id: str
+    producer_role: str
+    files: List[FileEntry]
+    delete: List[str]
+
+def _fail(msg: str) -> None:
+    raise ValueError("FD_PARSE_FAIL: " + msg)
+
+def parse_fd_patch_v1(text: str) -> Patch:
+    t = (text or "").replace("\r\n","\n").replace("\r","\n").strip()
+    if not t.startswith("FD_PATCH_V1"):
+        _fail("missing FD_PATCH_V1 header")
+    lines = t.split("\n")
+    meta = {}
+    files: List[FileEntry] = []
+    delete: List[str] = []
+    i = 1
+    while i < len(lines):
+        line = lines[i]
+        if line.startswith("FILE:") or line.strip() in ("DELETE:", "END"):
+            break
+        if line.strip() == "":
+            i += 1
+            continue
+        if ":" not in line:
+            _fail("bad meta line: " + line[:120])
+        k, v = line.split(":", 1)
+        meta[k.strip()] = v.strip()
+        i += 1
+
+    def parse_file(j: int) -> Tuple[int, FileEntry]:
+        header = lines[j]
+        path = header[len("FILE:"):].strip()
+        if path == "":
+            _fail("empty FILE path")
+        if j + 1 >= len(lines) or lines[j+1].strip() != "<<<":
+            _fail("FILE missing <<< for path=" + path)
+        k = j + 2
+        buf = []
+        while k < len(lines):
+            if lines[k].strip() == ">>>":
+                break
+            buf.append(lines[k])
+            k += 1
+        if k >= len(lines):
+            _fail("FILE missing >>> for path=" + path)
+        return k + 1, FileEntry(path=path, content="\n".join(buf) + "\n")
+
+    while i < len(lines):
+        line = lines[i].strip()
+        if line == "":
+            i += 1
+            continue
+        if line.startswith("FILE:"):
+            i, fe = parse_file(i)
+            files.append(fe)
+            continue
+        if line == "DELETE:":
+            i += 1
+            while i < len(lines):
+                l = lines[i].strip()
+                if l == "":
+                    i += 1
+                    continue
+                if l == "END":
+                    break
+                if l.startswith("-"):
+                    delete.append(l[1:].strip())
+                else:
+                    _fail("bad DELETE line: " + l[:120])
+                i += 1
+            continue
+        if line == "END":
+            break
+        _fail("unexpected line: " + line[:120])
+
+    wi = meta.get("work_item_id","").strip()
+    prod = meta.get("producer_role","").strip()
+    if wi == "":
+        _fail("missing work_item_id")
+    if prod == "":
+        _fail("missing producer_role")
+    if not files:
+        _fail("no FILE blocks")
+    return Patch(kind="patch", work_item_id=wi, producer_role=prod, files=files, delete=delete)
+
+def bundle_total_parts(raw: str) -> Tuple[int, int]:
+    t = (raw or "").strip()
+    if not t.startswith("FD_BUNDLE_V1"):
+        return (1,1)
+    first = t.splitlines()[0].strip()
+    if "PART" not in first:
+        return (1,1)
+    toks = first.split()
+    if len(toks) < 4:
+        return (1,1)
+    frac = toks[3]
+    if "/" not in frac:
+        return (1,1)
+    a,b = frac.split("/",1)
+    try:
+        return (int(a), int(b))
+    except Exception:
+        return (1,1)
+
+def _strip_bundle_header(raw: str) -> str:
+    t = (raw or "").replace("\r\n","\n").replace("\r","\n").strip()
+    if not t.startswith("FD_BUNDLE_V1"):
+        _fail("bundle missing header")
+    lines = t.split("\n")
+    return "\n".join(lines[1:]).lstrip()
+
+def parse_bundle_parts(parts: List[str]) -> Patch:
+    if not parts:
+        _fail("no parts")
+    base: Patch | None = None
+    seen = {}
+    order: List[str] = []
+    delete: List[str] = []
+    for raw in parts:
+        patch_text = "FD_PATCH_V1\n" + _strip_bundle_header(raw)
+        p = parse_fd_patch_v1(patch_text)
+        if base is None:
+            base = p
+        delete.extend(p.delete)
+        for fe in p.files:
+            if fe.path not in order:
+                order.append(fe.path)
+            seen[fe.path] = fe
+    assert base is not None
+    merged = [seen[p] for p in order]
+    return Patch(kind="bundle", work_item_id=base.work_item_id, producer_role=base.producer_role, files=merged, delete=delete)
+
+>>>
+
+FILE: src/fd_auto/__init__.py
+<<<
+
+
+>>>
+
+FILE: src/fd_auto/github_api.py
+<<<
+import json
+import os
+import urllib.request
+from typing import Any, Dict, List
+
+def _repo() -> str:
+    r = (os.environ.get("GITHUB_REPOSITORY") or "").strip()
+    if r == "":
+        raise RuntimeError("FD_FAIL: missing GITHUB_REPOSITORY")
+    return r
+
+def _headers(token: str) -> Dict[str, str]:
+    return {
+        "Authorization": "Bearer " + token,
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "fd-auto",
+    }
+
+def safe_get(d: Any, key: str, default: Any = "") -> Any:
+    if isinstance(d, dict) and key in d:
+        return d[key]
+    return default
+
+def get_issue(issue_number: int, token: str) -> Dict[str, Any]:
+    repo = _repo()
+    url = f"https://api.github.com/repos/{repo}/issues/{issue_number}"
+    req = urllib.request.Request(url, headers=_headers(token), method="GET")
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+def create_comment(issue_number: int, body: str, token: str) -> None:
+    repo = _repo()
+    url = f"https://api.github.com/repos/{repo}/issues/{issue_number}/comments"
+    payload = json.dumps({"body": body}).encode("utf-8")
+    req = urllib.request.Request(url, headers=_headers(token), data=payload, method="POST")
+    with urllib.request.urlopen(req, timeout=60):
+        pass
+
+def list_issues(token: str, state: str = "open") -> List[Dict[str, Any]]:
+    repo = _repo()
+    url = f"https://api.github.com/repos/{repo}/issues?state={state}&per_page=100"
+    req = urllib.request.Request(url, headers=_headers(token), method="GET")
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+def list_comments(issue_number: int, token: str) -> List[Dict[str, Any]]:
+    repo = _repo()
+    url = f"https://api.github.com/repos/{repo}/issues/{issue_number}/comments?per_page=100"
+    req = urllib.request.Request(url, headers=_headers(token), method="GET")
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+>>>
+
+FILE: src/fd_auto/gemini_client.py
+<<<
+import json
+import os
+import time
+import urllib.error
+import urllib.request
+
+DEFAULT_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta"
+DEFAULT_MODEL = "gemini-2.5-pro"
+
+def _env_int(name: str, default: int) -> int:
+    v = (os.environ.get(name) or "").strip()
+    if v == "":
+        return default
+    try:
+        return int(v)
+    except Exception:
+        return default
+
+def _endpoint(base: str, model: str) -> str:
+    b = (base or DEFAULT_ENDPOINT).rstrip("/")
+    return b + "/models/" + model + ":generateContent"
+
+def call_gemini(prompt: str, timeout_s: int = 900) -> str:
+    api_key = (os.environ.get("GEMINI_API_KEY") or "").strip()
+    if api_key == "":
+        raise RuntimeError("FD_FAIL: missing GEMINI_API_KEY")
+    model = (os.environ.get("GEMINI_MODEL") or DEFAULT_MODEL).strip()
+    base = (os.environ.get("GEMINI_ENDPOINT_BASE") or DEFAULT_ENDPOINT).strip()
+    url = _endpoint(base, model)
+
+    retries = _env_int("FD_GEMINI_RETRIES", 2)
+    think_budget = _env_int("FD_GEMINI_THINKING_BUDGET", 1024)
+    max_out = _env_int("FD_GEMINI_MAX_OUTPUT_TOKENS", 0)  # 0 => omit
+    resp_mime = (os.environ.get("FD_GEMINI_RESPONSE_MIME") or "text/plain").strip()
+
+    def payload() -> dict:
+        gen = {
+            "temperature": 0.2,
+            "responseMimeType": resp_mime,
+            "thinkingConfig": {"includeThoughts": False, "thinkingBudget": (think_budget if think_budget > 0 else 1)},
+        }
+        if max_out > 0:
+            gen["maxOutputTokens"] = max_out
+        return {"contents": [{"role": "user", "parts": [{"text": prompt}]}], "generationConfig": gen}
+
+    last_raw = ""
+    for attempt in range(1, retries + 1):
+        body = json.dumps(payload()).encode("utf-8")
+        req = urllib.request.Request(url=url, data=body, method="POST")
+        req.add_header("content-type", "application/json; charset=utf-8")
+        req.add_header("x-goog-api-key", api_key)
+        try:
+            with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+                last_raw = resp.read().decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as e:
+            b = ""
+            try:
+                b = e.read().decode("utf-8", errors="replace")
+            except Exception:
+                pass
+            raise RuntimeError("FD_FAIL: gemini http=" + str(e.code) + " body=" + b[:800])
+        except Exception:
+            if attempt < retries:
+                time.sleep(min(2 ** (attempt - 1), 4))
+                continue
+            raise
+
+        data = json.loads(last_raw)
+        cands = data.get("candidates") or []
+        if isinstance(cands, list) and cands:
+            c0 = cands[0]
+            content = c0.get("content") if isinstance(c0, dict) else None
+            parts = content.get("parts") if isinstance(content, dict) else None
+            if isinstance(parts, list):
+                texts = []
+                for p in parts:
+                    if isinstance(p, dict) and isinstance(p.get("text"), str):
+                        texts.append(p["text"])
+                if texts:
+                    return "\n".join(texts)
+        # allow retry if no parts
+        if attempt < retries:
+            continue
+        raise RuntimeError("FD_FAIL: gemini parse raw=" + last_raw[:800])
+
+>>>
+
+FILE: src/fd_auto/util.py
+<<<
+import os
+import re
+from typing import Dict, Tuple
+
+def env(name: str, default: str = "") -> str:
+    v = os.environ.get(name, default)
+    return (v or "").strip()
+
+def require_env(name: str) -> str:
+    v = env(name)
+    if v == "":
+        raise RuntimeError("FD_FAIL: missing env " + name)
+    return v
+
+def extract_field(text: str, key: str) -> str:
+    for line in (text or "").splitlines():
+        if line.startswith(key + ":"):
+            return line.split(":", 1)[1].strip()
+    return ""
+
+def slugify(s: str) -> str:
+    t = (s or "").lower().strip()
+    t = re.sub(r"[^a-z0-9]+", "-", t)
+    t = re.sub(r"-+", "-", t).strip("-")
+    if t == "":
+        return "app"
+    return t[:40]
+
+def task_key(s: str) -> Tuple[int, int, int, int, int, int, int, int]:
+    t = (s or "").strip()
+    if not re.match(r"^[0-9]+(\.[0-9]+)*$", t):
+        return (9999, 9999, 9999, 9999, 9999, 9999, 9999, 9999)
+    parts = [int(x) for x in t.split(".")]
+    pad = 8
+    parts = parts[:pad] + [9999] * max(0, pad - len(parts))
+    return tuple(parts)
+
+def first_n_lines(s: str, n: int) -> str:
+    return "\n".join((s or "").splitlines()[:n])
+
+>>>
+
+FILE: src/fd_auto/apply_patch.py
+<<<
+import shutil
+from pathlib import Path
+from src.fd_auto.patch_parse import Patch
+
+def apply_patch(patch: Patch, repo_root: str) -> None:
+    root = Path(repo_root)
+    for rel in patch.delete:
+        if rel.strip() == "":
+            continue
+        p = root / rel
+        if p.is_dir():
+            shutil.rmtree(p, ignore_errors=True)
+        elif p.exists():
+            try:
+                p.unlink()
+            except Exception:
+                pass
+    for fe in patch.files:
+        path = root / fe.path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(fe.content, encoding="utf-8")
+
+>>>
+
+FILE: src/fd_auto/actions_api.py
+<<<
+import io
+import json
+import os
+import time
+import urllib.request
+import zipfile
+from typing import Any, Dict, List, Optional, Tuple
+
+def _repo() -> str:
+    r = (os.environ.get("GITHUB_REPOSITORY") or "").strip()
+    if r == "":
+        raise RuntimeError("FD_FAIL: missing GITHUB_REPOSITORY")
+    return r
+
+def _headers(token: str) -> Dict[str, str]:
+    return {
+        "Authorization": "Bearer " + token,
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "fd-auto",
+    }
+
+def _get_json(url: str, token: str) -> Any:
+    req = urllib.request.Request(url, headers=_headers(token), method="GET")
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+def _post_json(url: str, token: str, payload: Dict[str, Any]) -> None:
+    body = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(url, headers=_headers(token), data=body, method="POST")
+    req.add_header("content-type", "application/json; charset=utf-8")
+    with urllib.request.urlopen(req, timeout=60):
+        pass
+
+def dispatch_workflow(workflow_file: str, ref: str, inputs: Dict[str, str], token: str) -> None:
+    repo = _repo()
+    wf = workflow_file.strip()
+    if wf == "":
+        raise RuntimeError("FD_FAIL: workflow_file empty")
+    url = f"https://api.github.com/repos/{repo}/actions/workflows/{wf}/dispatches"
+    payload = {"ref": ref}
+    if inputs:
+        payload["inputs"] = inputs
+    _post_json(url, token, payload)
+
+def find_latest_run_id(workflow_file: str, branch: str, not_before_epoch: float, token: str, timeout_s: int = 180) -> int:
+    repo = _repo()
+    wf = workflow_file.strip()
+    deadline = time.time() + timeout_s
+    last_seen = 0
+    while time.time() < deadline:
+        url = f"https://api.github.com/repos/{repo}/actions/workflows/{wf}/runs?per_page=20&branch={branch}&event=workflow_dispatch"
+        data = _get_json(url, token)
+        runs = data.get("workflow_runs") if isinstance(data, dict) else None
+        if isinstance(runs, list):
+            for r in runs:
+                if not isinstance(r, dict):
+                    continue
+                created = r.get("created_at") or ""
+                run_id = int(r.get("id") or 0)
+                if run_id <= 0:
+                    continue
+                # created_at is ISO; compare by epoch via time.strptime rough
+                try:
+                    # 2026-02-27T00:00:00Z
+                    tt = time.strptime(created, "%Y-%m-%dT%H:%M:%SZ")
+                    epoch = time.mktime(tt)
+                except Exception:
+                    epoch = 0
+                if epoch >= not_before_epoch and run_id > last_seen:
+                    return run_id
+                last_seen = max(last_seen, run_id)
+        time.sleep(3)
+    raise RuntimeError("FD_FAIL: could not find workflow run for " + wf + " branch=" + branch)
+
+def wait_run_complete(run_id: int, token: str, timeout_s: int = 1800) -> Dict[str, Any]:
+    repo = _repo()
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        url = f"https://api.github.com/repos/{repo}/actions/runs/{run_id}"
+        data = _get_json(url, token)
+        if isinstance(data, dict):
+            status = str(data.get("status") or "")
+            conclusion = str(data.get("conclusion") or "")
+            if status == "completed":
+                return data
+        time.sleep(5)
+    raise RuntimeError("FD_FAIL: workflow run timeout run_id=" + str(run_id))
+
+def download_run_logs_zip(run_id: int, token: str) -> bytes:
+    repo = _repo()
+    url = f"https://api.github.com/repos/{repo}/actions/runs/{run_id}/logs"
+    req = urllib.request.Request(url, headers=_headers(token), method="GET")
+    with urllib.request.urlopen(req, timeout=120) as resp:
+        return resp.read()
+
+def extract_logs_text(logs_zip: bytes, max_chars: int = 200000) -> str:
+    buf = io.BytesIO(logs_zip)
+    z = zipfile.ZipFile(buf, "r")
+    texts: List[str] = []
+    for name in z.namelist():
+        if not name.endswith(".txt"):
+            continue
+        try:
+            data = z.read(name).decode("utf-8", errors="ignore")
+        except Exception:
+            continue
+        texts.append("### " + name + "\n" + data)
+        if sum(len(x) for x in texts) > max_chars:
+            break
+    out = "\n\n".join(texts)
+    if len(out) > max_chars:
+        out = out[:max_chars]
+    return out
+
+
+def list_workflows(token: str) -> List[Dict[str, Any]]:
+    repo = _repo()
+    url = f"https://api.github.com/repos/{repo}/actions/workflows?per_page=100"
+    data = _get_json(url, token)
+    wfs = data.get("workflows") if isinstance(data, dict) else None
+    if isinstance(wfs, list):
+        return [w for w in wfs if isinstance(w, dict)]
+    return []
+
+def resolve_workflow_file(user_value: str, token: str) -> str:
+    v = (user_value or "").strip()
+    if v.endswith(".yml") or v.endswith(".yaml"):
+        return v
+    if v.startswith(".github/workflows/"):
+        return v.replace(".github/workflows/","")
+    wfs = list_workflows(token)
+    for w in wfs:
+        if str(w.get("name") or "") == v:
+            p = str(w.get("path") or "")
+            return p.replace(".github/workflows/","")
+    for w in wfs:
+        p = str(w.get("path") or "")
+        if p.endswith("/" + v):
+            return v
+    return v
+
+>>>
+
+FILE: tools/fd_auto_apply_snapshot.py
+<<<
+#!/usr/bin/env python3
+import os
+from pathlib import Path
+
+TEXT_EXT = {".py",".md",".yml",".yaml",".json",".txt",".html",".css",".js",".ts",".csv"}
+
+def _fail(msg: str) -> None:
+    raise RuntimeError("FD_FAIL: " + msg)
+
+def _is_text_path(rel: str) -> bool:
+    return Path(rel).suffix.lower() in TEXT_EXT
+
+def apply_snapshot(snapshot_text: str, repo_root: Path) -> None:
+    t = (snapshot_text or "").replace("\r\n","\n").replace("\r","\n")
+    if not t.strip().startswith("FD_APP_SOURCE_V1"):
+        _fail("snapshot missing header")
+    lines = t.split("\n")
+    i = 0
+    # skip header/meta until first FILE:
+    while i < len(lines) and not lines[i].startswith("FILE:"):
+        i += 1
+    while i < len(lines):
+        line = lines[i]
+        if not line.startswith("FILE:"):
+            i += 1
+            continue
+        rel = line.split(":",1)[1].strip()
+        if rel == "":
+            _fail("empty FILE path")
+        if i+1 >= len(lines) or lines[i+1].strip() != "<<<":
+            _fail("missing <<< for " + rel)
+        j = i + 2
+        buf = []
+        while j < len(lines):
+            if lines[j].strip() == ">>>":
+                break
+            buf.append(lines[j])
+            j += 1
+        if j >= len(lines):
+            _fail("missing >>> for " + rel)
+        i = j + 1
+        if not _is_text_path(rel):
+            continue
+        out_path = repo_root / rel
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text("\n".join(buf) + "\n", encoding="utf-8")
+
+def main() -> int:
+    import sys
+    if len(sys.argv) < 2:
+        print("usage: fd_auto_apply_snapshot.py <snapshot_file>")
+        return 2
+    repo_root = Path(os.getcwd())
+    snap = Path(sys.argv[1])
+    if not snap.exists():
+        _fail("snapshot file not found " + str(snap))
+    txt = snap.read_text(encoding="utf-8", errors="ignore")
+    apply_snapshot(txt, repo_root)
+    print("FD_OK: applied snapshot")
+    return 0
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
+>>>
+
+FILE: tools/fd_auto_tune_branch.py
+<<<
+#!/usr/bin/env python3
+import datetime
+import glob
+import os
+import subprocess
+import sys
+import tempfile
+import traceback
+import time
+from pathlib import Path
+
+sys.path.insert(0, os.path.abspath(os.getcwd()))
+
+
+def _print_step(msg: str) -> None:
+    print("FD_STEP: " + msg)
+
+
+from src.fd_auto.actions_api import dispatch_workflow, find_latest_run_id, wait_run_complete, download_run_logs_zip, extract_logs_text, resolve_workflow_file
+from src.fd_auto.gemini_client import call_gemini
+from src.fd_auto.patch_parse import parse_bundle_parts, bundle_total_parts
+from src.fd_auto.apply_patch import apply_patch
+from src.fd_auto.util import first_n_lines
+from tools.fd_auto_apply_snapshot import apply_snapshot
+
+def _run(cmd, cwd):
+    return subprocess.run(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+
+def _write(p: Path, s: str) -> None:
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(s, encoding="utf-8", errors="ignore")
+
+def _gemini_call_logged(prompt: str, label: str, artifacts: Path) -> str:
+    print("FD_STEP: gemini_call_begin label=" + label + " prompt_chars=" + str(len(prompt)))
+    _write(artifacts / (label + "_prompt.txt"), prompt)
+    resp = call_gemini(prompt, timeout_s=900)
+    print("FD_STEP: gemini_call_end label=" + label + " resp_chars=" + str(len(resp)))
+    _write(artifacts / (label + "_response.txt"), resp)
+    return resp
+
+def _call_bundle(prompt: str, out_dir: Path) -> list[str]:
+    parts = []
+    first = _gemini_call_logged(prompt, out_dir.name + "_part_1", out_dir)
+    parts.append(first)
+    _write(out_dir / "part_1.txt", first)
+    x, y = bundle_total_parts(first)
+    if y <= 1:
+        return parts
+    cur = x
+    while cur < y and cur < 8:
+        cur += 1
+        cont = prompt + "\n\nCONTINUE\nReturn ONLY: FD_BUNDLE_V1 PART " + str(cur) + "/" + str(y) + "\nDo not repeat earlier parts.\n"
+        nxt = _gemini_call_logged(cont, out_dir.name + "_part_" + str(cur), out_dir)
+        parts.append(nxt)
+        _write(out_dir / ("part_" + str(cur) + ".txt"), nxt)
+    _write(out_dir / "bundle_full.txt", "\n\n".join(parts))
+    return parts
+
+def _upload_snapshot_chunks(snapshot_text: str, out_dir: Path) -> None:
+    if snapshot_text.strip() == "":
+        return
+    max_chars = int(os.environ.get("FD_SNAPSHOT_MAX_CHARS","180000") or "180000")
+    chunk_chars = int(os.environ.get("FD_SNAPSHOT_CHUNK_CHARS","50000") or "50000")
+    txt = snapshot_text[:max_chars]
+    total = (len(txt) + chunk_chars - 1) // chunk_chars
+    if total < 1:
+        total = 1
+    for i in range(total):
+        a = i * chunk_chars
+        b = min(len(txt), (i + 1) * chunk_chars)
+        chunk = txt[a:b]
+        prompt = ""
+        prompt += "ROLE: BUILDER\n"
+        prompt += "TASK: Receive repository snapshot chunk. Do not propose fixes yet.\n"
+        prompt += "INSTRUCTION: Reply with exactly: ACK " + str(i+1) + "/" + str(total) + "\n"
+        prompt += "SNAPSHOT_CHUNK " + str(i+1) + "/" + str(total) + "\n"
+        prompt += chunk + "\n"
+        _write(out_dir / ("snapshot_chunk_" + str(i+1) + "_prompt.txt"), prompt)
+        resp = _gemini_call_logged(prompt, out_dir.name + "_snapshot_ack_" + str(i+1), out_dir)
+        if ("ACK " + str(i+1) + "/" + str(total)) not in resp:
+            print("FD_WARN: snapshot_ack_unexpected chunk=" + str(i+1) + "/" + str(total) + " resp_head=" + resp[:80].replace("\n"," "))
+        _write(out_dir / ("snapshot_chunk_" + str(i+1) + "_response.txt"), resp)
+
+def _get_fix_bundle_and_parse(base_prompt: str, out_dir: Path, max_tries: int = 3):
+    last_err = ""
+    for k in range(1, max_tries + 1):
+        prompt = base_prompt
+        if k > 1:
+            prompt += "\n\nFORMAT_REPAIR\nPrevious output failed to parse: " + last_err + "\n"
+            prompt += "Return ONLY FD_BUNDLE_V1 PART 1/Y.\n"
+            prompt += "The FIRST line must be: FD_BUNDLE_V1 PART 1/Y\n"
+            prompt += "Metadata lines MUST be key: value (with colon), e.g. work_item_id: WI-XYZ\n"
+            prompt += "File blocks MUST use: FILE: path (with colon)\n"
+            prompt += "Every FILE block MUST have <<< and >>>.\n"
+            prompt += "No markdown fences. No prose.\n"
+        parts = _call_bundle(prompt, out_dir / ("gen_try_" + str(k)))
+        try:
+            patch = parse_bundle_parts(parts)
+            return (patch, parts, "")
+        except Exception as exc:
+            last_err = str(exc)
+            _write(out_dir / ("parse_error_try_" + str(k) + ".txt"), last_err + "\n")
+            continue
+    return (None, [], last_err)
+
+def _summarize_logs(logs_text: str) -> str:
+    if not logs_text:
+        return ""
+    lines = logs_text.splitlines()
+    patterns = ["Error:", "ERROR", "Traceback", "Exception", "FAILED", "Failure", "FD_FAIL", "FD_POLICY_FAIL", "UnboundLocalError", "ModuleNotFoundError"]
+    hits = []
+    for i, line in enumerate(lines):
+        for p in patterns:
+            if p in line:
+                start = max(0, i - 2)
+                end = min(len(lines), i + 3)
+                snippet = "\n".join(lines[start:end])
+                hits.append("----\nline=" + str(i+1) + "\n" + snippet)
+                break
+        if len(hits) >= 40:
+            break
+    head = "\n".join(lines[:120])
+    out = []
+    out.append("LOG_HEAD_BEGIN")
+    out.append(head)
+    out.append("LOG_HEAD_END")
+    out.append("")
+    out.append("DISCREPANCIES_BEGIN")
+    out.extend(hits)
+    out.append("DISCREPANCIES_END")
+    return "\n".join(out) + "\n"
+
+def _parse_inputs(s: str) -> dict:
+    out = {}
+    for line in (s or "").splitlines():
+        t = line.strip()
+        if t == "" or t.startswith("#"):
+            continue
+        if "=" not in t:
+            continue
+        k, v = t.split("=", 1)
+        out[k.strip()] = v.strip()
+    return out
+
+def _set_origin_with_token(repo_root: Path, token: str) -> None:
+    repo = (os.environ.get("GITHUB_REPOSITORY") or "").strip()
+    if repo == "":
+        raise RuntimeError("FD_FAIL: missing GITHUB_REPOSITORY")
+    remote_url = "https://x-access-token:" + token + "@github.com/" + repo + ".git"
+    subprocess.check_call(["git","remote","set-url","origin",remote_url], cwd=str(repo_root))
+
+def _ensure_worktree(branch: str) -> tuple[Path, str]:
+    repo_root = Path(os.getcwd())
+    wt_dir = Path(tempfile.mkdtemp(prefix="fd_tune_wt_"))
+    # fetch branch
+    subprocess.check_call(["git","fetch","origin",branch], cwd=str(repo_root))
+    subprocess.check_call(["git","worktree","add",str(wt_dir),branch], cwd=str(repo_root))
+    return wt_dir, str(repo_root)
+
+def _read_latest_snapshot(wt_dir: Path) -> str:
+    snap_dir = wt_dir / "docs" / "assets" / "app"
+    snaps = sorted([str(p) for p in snap_dir.glob("app-source_*.txt")]) if snap_dir.exists() else []
+    if not snaps:
+        return ""
+    return Path(snaps[-1]).read_text(encoding="utf-8", errors="ignore")
+
+def main() -> int:
+    if len(sys.argv) < 4:
+        print("usage: fd_auto_tune_branch.py <branch> <workflow_file> <max_attempts> [workflow_inputs]")
+        return 2
+    branch = sys.argv[1].strip()
+    workflow_file_in = sys.argv[2].strip()
+    max_attempts = int((sys.argv[3].strip() or "10"))
+    workflow_inputs = sys.argv[4] if len(sys.argv) > 4 else ""
+
+    token = (os.environ.get("FD_BOT_TOKEN") or "").strip()
+    if token == "":
+        raise RuntimeError("FD_FAIL: missing FD_BOT_TOKEN")
+    if max_attempts < 1:
+        max_attempts = 1
+
+    workflow_file = resolve_workflow_file(workflow_file_in, token)
+    print("FD_DEBUG: tune_config branch=" + branch + " workflow_file_in=" + workflow_file_in + " workflow_file=" + workflow_file + " max_attempts=" + str(max_attempts))
+
+    artifacts = Path(tempfile.mkdtemp(prefix="fd_tune_artifacts_"))
+    _write(artifacts / "branch.txt", branch + "\n")
+    _write(artifacts / "workflow_file.txt", workflow_file + "\n")
+    _write(artifacts / "workflow_inputs.txt", workflow_inputs + "\n")
+
+    wt_dir, repo_root = _ensure_worktree(branch)
+    _set_origin_with_token(Path(repo_root), token)
+
+    for attempt in range(1, max_attempts + 1):
+        print("FD_DEBUG: attempt_begin " + str(attempt) + "/" + str(max_attempts))
+        try:
+            # Create snapshot if missing
+            snap_dir_local = os.path.join(str(wt_dir), "docs", "assets", "app")
+            os.makedirs(snap_dir_local, exist_ok=True)
+            snaps0 = sorted(glob.glob(os.path.join(snap_dir_local, "app-source_*.txt")))
+            if not snaps0:
+                subprocess.check_call([sys.executable, os.path.join(repo_root, "tools", "fd_auto_make_snapshot.py")], cwd=str(wt_dir))
+            # Commit snapshot so it is visible in the target branch history.
+            st0 = _run(["git","status","--porcelain"], str(wt_dir))
+            _write(artifacts / ("snapshot_git_status_attempt_" + str(attempt) + ".txt"), st0.stdout)
+            if st0.stdout.strip() != "":
+                subprocess.check_call(["git","add","docs/assets/app/app-source_*.txt"], cwd=str(wt_dir))
+                try:
+                    subprocess.check_call(["git","commit","-m","FD snapshot attempt " + str(attempt)], cwd=str(wt_dir))
+                except Exception:
+                    pass
+                push0 = _run(["git","push","--force-with-lease"], str(wt_dir))
+                _write(artifacts / ("snapshot_git_push_attempt_" + str(attempt) + ".txt"), push0.stdout)
+                if push0.returncode != 0:
+                    print("FD_WARN: snapshot_push_failed rc=" + str(push0.returncode))
+                    raise RuntimeError("FD_FAIL: snapshot push failed")
+                print("FD_STEP: snapshot_commit_push_done")
+
+
+            # Dispatch workflow on the branch and collect logs
+            inputs = _parse_inputs(workflow_inputs)
+            if not inputs:
+                _print_step("warn_empty_workflow_inputs workflow_file=" + workflow_file)
+                _write(artifacts / ("attempt_" + str(attempt) + "_inputs_empty.txt"), "workflow_inputs empty\n")
+            start_epoch = time.time()
+            _write(artifacts / ("attempt_" + str(attempt) + "_dispatch.txt"), "branch=" + branch + "\nworkflow_file=" + workflow_file + "\ninputs=" + str(inputs) + "\n")
+            print("FD_STEP: dispatch_workflow file=" + workflow_file + " ref=" + branch + " inputs=" + str(inputs))
+            _print_step("dispatch_workflow file=" + workflow_file + " ref=" + branch + " inputs=" + str(inputs))
+            dispatch_workflow(workflow_file, branch, inputs, token)
+            run_id = find_latest_run_id(workflow_file, branch, start_epoch - 5, token, timeout_s=180)
+            _print_step("workflow_run_found run_id=" + str(run_id))
+            print("FD_STEP: workflow_run_found run_id=" + str(run_id))
+            run_info = wait_run_complete(run_id, token, timeout_s=3600)
+            _print_step("workflow_run_completed run_id=" + str(run_id) + " conclusion=" + str(run_info.get("conclusion")))
+            print("FD_STEP: workflow_run_completed run_id=" + str(run_id) + " status=" + str(run_info.get("status")) + " conclusion=" + str(run_info.get("conclusion")))
+            _print_step("download_logs_begin run_id=" + str(run_id))
+            logs_zip = download_run_logs_zip(run_id, token)
+            _print_step("download_logs_end run_id=" + str(run_id) + " bytes=" + str(len(logs_zip)))
+            logs_text = extract_logs_text(logs_zip, max_chars=250000)
+            _write(artifacts / ("run_" + str(run_id) + "_attempt_" + str(attempt) + ".log"), logs_text)
+            summary = ""
+            status = str(run_info.get("status") or "")
+            conclusion = str(run_info.get("conclusion") or "")
+            summary += "RUN_ID=" + str(run_id) + "\n"
+            summary += "STATUS=" + status + "\n"
+            summary += "CONCLUSION=" + conclusion + "\n"
+            html_url = str(run_info.get("html_url") or "")
+            if html_url:
+                summary += "URL=" + html_url + "\n"
+            summary += "\n" + _summarize_logs(logs_text)
+            _write(artifacts / ("attempt_" + str(attempt) + "_workflow_summary.txt"), summary)
+
+            status = str(run_info.get("status") or "")
+            conclusion = str(run_info.get("conclusion") or "")
+            if status == "completed" and conclusion == "success":
+                print("FD_OK: workflow green run_id=" + str(run_id))
+                return 0
+
+            snapshot_text = _read_latest_snapshot(wt_dir)
+            _write(artifacts / ("snapshot_path_attempt_" + str(attempt) + ".txt"), "exists=" + ("1" if snapshot_text.strip() else "0") + "\n")
+            _upload_snapshot_chunks(snapshot_text, artifacts / ("snapshot_upload_attempt_" + str(attempt)))
+
+            prompt = ""
+            prompt += "ROLE: BUILDER\n"
+            prompt += "TASK: Fix the repository so the dispatched workflow passes on branch " + branch + ".\n"
+            prompt += "WORKFLOW_FILE=" + workflow_file + "\n"
+            prompt += "OUTPUT: FD_BUNDLE_V1 PART 1/Y only. No prose.\n"
+            prompt += "FORMAT RULES:\n"
+            prompt += "- First line must be: FD_BUNDLE_V1 PART 1/Y\n"
+            prompt += "- Metadata lines must be key: value\n"
+            prompt += "- File blocks must be: FILE: path (with colon) then <<< then content then >>>\n"
+            prompt += "- Close every FILE block with >>>\n"
+            prompt += "- Do NOT output markdown fences\n"
+            prompt += "You MUST include an updated snapshot file: docs/assets/app/app-source_<timestamp>.txt\n"
+            summary_text = _summarize_logs(logs_text)
+            _write(artifacts / ("attempt_" + str(attempt) + "_workflow_summary.txt"), summary_text)
+            prompt += "\nWORKFLOW_LOGS_SUMMARY\n" + summary_text[:120000] + "\n"
+            prompt += "\nWORKFLOW_LOGS_RAW\n" + logs_text[:200000] + "\n"
+            _write(artifacts / ("fix_prompt_attempt_" + str(attempt) + ".txt"), prompt)
+
+            print("FD_STEP: gemini_fix_request_begin attempt=" + str(attempt))
+            _print_step("gemini_fix_request_begin attempt=" + str(attempt))
+            patch, parts, perr = _get_fix_bundle_and_parse(prompt, artifacts / ("fix_bundle_attempt_" + str(attempt)), max_tries=3)
+            _print_step("gemini_fix_request_end attempt=" + str(attempt) + " ok=" + ("1" if patch is not None else "0"))
+            print("FD_STEP: gemini_fix_request_end attempt=" + str(attempt) + " ok=" + ("1" if patch is not None else "0"))
+            if patch is None:
+                _write(artifacts / ("fix_parse_failed_attempt_" + str(attempt) + ".txt"), perr + "\n")
+                _print_step("fix_parse_failed attempt=" + str(attempt) + " err=" + perr[:160].replace("\n"," "))
+                continue
+
+            apply_patch(patch, str(wt_dir))
+            print("FD_STEP: apply_patch_done")
+
+            # Apply returned snapshot (slice into files)
+            snap_dir = wt_dir / "docs" / "assets" / "app"
+            snaps = sorted([str(p) for p in snap_dir.glob("app-source_*.txt")]) if snap_dir.exists() else []
+            if snaps:
+                newest = snaps[-1]
+                txt = Path(newest).read_text(encoding="utf-8", errors="ignore")
+                apply_snapshot(txt, wt_dir)
+                print("FD_STEP: apply_snapshot_done file=" + newest)
+
+            subprocess.check_call(["git","add","-A"], cwd=str(wt_dir))
+            st = _run(["git","status","--porcelain"], str(wt_dir))
+            _write(artifacts / ("git_status_attempt_" + str(attempt) + ".txt"), st.stdout)
+
+            try:
+                subprocess.check_call(["git","commit","-m","FD tune attempt " + str(attempt)], cwd=str(wt_dir))
+                print("FD_STEP: git_commit_done")
+            except Exception:
+                pass
+            pushr = _run(["git","push","--force-with-lease"], str(wt_dir))
+            _write(artifacts / ("git_push_attempt_" + str(attempt) + ".txt"), pushr.stdout)
+            if pushr.returncode != 0:
+                print("FD_WARN: git_push_failed rc=" + str(pushr.returncode))
+                raise RuntimeError("FD_FAIL: git push failed")
+            print("FD_STEP: git_push_done")
+
+        except Exception:
+            _write(artifacts / ("unexpected_exception_attempt_" + str(attempt) + ".txt"), traceback.format_exc() + "\n")
+            _print_step("attempt_exception attempt=" + str(attempt))
+            print(traceback.format_exc())
+            continue
+
+    print("FD_FAIL: tuning attempts exhausted")
+    return 1
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
+>>>
+
+FILE: tools/fd_auto_build_from_issue.py
+<<<
+#!/usr/bin/env python3
+import datetime
+import sys
+
+import os
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
+
+sys.path.insert(0, os.path.abspath(os.getcwd()))
+
+from src.fd_auto.github_api import get_issue, create_comment
+from src.fd_auto.util import require_env, extract_field, slugify
+from src.fd_auto.gemini_client import call_gemini
+from src.fd_auto.patch_parse import parse_fd_patch_v1, parse_bundle_parts, bundle_total_parts
+from src.fd_auto.apply_patch import apply_patch
+
+def _write(path: Path, s: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(s, encoding="utf-8", errors="ignore")
+
+def _call_bundle(prompt: str, out_dir: Path) -> list[str]:
+    parts = []
+    first = call_gemini(prompt, timeout_s=900)
+    parts.append(first)
+    _write(out_dir / "part_1.txt", first)
+    x, y = bundle_total_parts(first)
+    if y <= 1:
+        return parts
+    cur = x
+    # hard cap; user can tune later
+    while cur < y and cur < 8:
+        cur += 1
+        cont = prompt + "\n\nCONTINUE\nReturn ONLY: FD_BUNDLE_V1 PART " + str(cur) + "/" + str(y) + "\nDo not repeat earlier parts.\n"
+        nxt = call_gemini(cont, timeout_s=900)
+        parts.append(nxt)
+        _write(out_dir / ("part_" + str(cur) + ".txt"), nxt)
+    _write(out_dir / "bundle_full.txt", "\n\n".join(parts))
+    return parts
+
+def main() -> int:
+    import sys
+    if len(sys.argv) < 2:
+        print("usage: fd_auto_build_from_issue.py <milestone_issue_number>")
+        return 2
+    issue_number = int(sys.argv[1])
+
+    token = require_env("FD_BOT_TOKEN")
+    repo_root = os.getcwd()
+    try:
+
+        issue = get_issue(issue_number, token)
+        body = (issue.get("body") or "")
+        title = (issue.get("title") or "")
+        ms_id = extract_field(body, "Milestone ID") or "MS-01"
+        app_slug = slugify(title)
+        ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%S")
+        branch = "app-" + ms_id.lower() + "-" + ts
+
+        artifacts = Path(tempfile.mkdtemp(prefix="fd_build_artifacts_"))
+        _write(artifacts / "milestone_issue.txt", body)
+        subprocess.check_call(["python3","tools/fd_auto_make_snapshot.py"], cwd=repo_root)
+
+        # 1) Plan (PM): FD_PATCH_V1 handoff-only
+        pm_prompt = open("agent_guides/ROLE_PM.txt","r",encoding="utf-8",errors="ignore").read() if os.path.exists("agent_guides/ROLE_PM.txt") else "ROLE: PM\nOutput FD_PATCH_V1 with handoff files only.\n"
+        plan_prompt = pm_prompt + "\n\nMILESTONE_TITLE\n" + title + "\n\nMILESTONE_BODY\n" + body + "\n"
+        _write(artifacts / "plan_prompt.txt", plan_prompt)
+
+        plan_out = ""
+        patch = None
+        last_err = ""
+        for attempt in range(1,4):
+            plan_out = call_gemini(plan_prompt, timeout_s=900)
+            _write(artifacts / ("plan_output_attempt_" + str(attempt) + ".txt"), plan_out)
+            try:
+                patch = parse_fd_patch_v1(plan_out)
+                break
+            except Exception as exc:
+                last_err = str(exc)
+                continue
+        if patch is None:
+            create_comment(issue_number, "FD_FAIL: plan parse failed\nERROR=" + last_err, token)
+            return 1
+
+        # Apply plan into repo (handoff)
+        apply_patch(patch, repo_root)
+
+        # 2) Code bundle
+        plan_text = ""
+        plan_path = Path(repo_root) / "handoff" / "app_building_plan.md"
+        if plan_path.exists():
+            plan_text = plan_path.read_text(encoding="utf-8", errors="ignore")
+        code_prompt = open("agent_guides/ROLE_BUILDER.txt","r",encoding="utf-8",errors="ignore").read() if os.path.exists("agent_guides/ROLE_BUILDER.txt") else ""
+        code_prompt += "\n\nTASK\nGenerate FULL APPLICATION CODE ONLY.\n"
+        code_prompt += "\n\nAPP_BUILDING_PLAN\n" + plan_text + "\n"
+        code_prompt += "\nRULES\n- Output FD_BUNDLE_V1 PART 1/Y\n- Close every FILE block with >>>\n"
+        _write(artifacts / "code_prompt.txt", code_prompt)
+        code_parts = _call_bundle(code_prompt, artifacts / "code_bundle")
+        code_patch = parse_bundle_parts(code_parts)
+        apply_patch(code_patch, repo_root)
+
+        # 3) Docs bundle
+        docs_prompt = open("agent_guides/ROLE_BUILDER.txt","r",encoding="utf-8",errors="ignore").read() if os.path.exists("agent_guides/ROLE_BUILDER.txt") else ""
+        docs_prompt += "\n\nTASK\nGenerate COMPREHENSIVE DOCUMENTATION ONLY.\n"
+        docs_prompt += "- Write README.md and docs/howto.md and docs/troubleshooting.md\n"
+        docs_prompt += "\n\nAPP_BUILDING_PLAN\n" + plan_text + "\n"
+        docs_prompt += "\nRULES\n- Output FD_BUNDLE_V1 PART 1/Y\n- Close every FILE block with >>>\n"
+        _write(artifacts / "docs_prompt.txt", docs_prompt)
+        docs_parts = _call_bundle(docs_prompt, artifacts / "docs_bundle")
+        docs_patch = parse_bundle_parts(docs_parts)
+        apply_patch(docs_patch, repo_root)
+
+        # 4) Tests bundle
+        tests_prompt = open("agent_guides/ROLE_BUILDER.txt","r",encoding="utf-8",errors="ignore").read() if os.path.exists("agent_guides/ROLE_BUILDER.txt") else ""
+        tests_prompt += "\n\nTASK\nGenerate UNIT TESTS ONLY.\n"
+        tests_prompt += "- Write tests/ files for src/ modules\n"
+        tests_prompt += "- Ensure tests run with: python -m unittest discover -s tests\n"
+        tests_prompt += "\n\nAPP_BUILDING_PLAN\n" + plan_text + "\n"
+        tests_prompt += "\nRULES\n- Output FD_BUNDLE_V1 PART 1/Y\n- Close every FILE block with >>>\n"
+        _write(artifacts / "tests_prompt.txt", tests_prompt)
+        tests_parts = _call_bundle(tests_prompt, artifacts / "tests_bundle")
+        tests_patch = parse_bundle_parts(tests_parts)
+        apply_patch(tests_patch, repo_root)
+        subprocess.check_call(["python3","tools/fd_auto_make_snapshot.py"], cwd=repo_root)
+
+# 3) (Optional) docs and tests are deferred; this build flow only creates app branch from code bundle.
+        # Users run Tune flow to add docs/tests using branch input and extra env keys.
+
+        # Publish branch
+        subprocess.check_call(["git","checkout","-B", branch])
+        subprocess.check_call(["git","add","-A"])
+        try:
+            subprocess.check_call(["git","commit","-m","FD build " + branch])
+        except Exception:
+            pass
+        subprocess.check_call(["git","push","-u","origin", branch, "--force-with-lease"])
+
+        create_comment(issue_number, "FD_OK: built app branch\nBRANCH=" + branch + "\nARTIFACTS_DIR=" + str(artifacts), token)
+        print("FD_OK: branch=" + branch)
+        print("FD_ARTIFACTS_DIR=" + str(artifacts))
+        return 0
+
+    except Exception as exc:
+        import traceback
+        print("FD_WARN: build_exception")
+        print(traceback.format_exc())
+        return 1
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
+>>>
+
+FILE: tools/fd_auto_make_snapshot.py
+<<<
+#!/usr/bin/env python3
+import datetime
+import os
+from pathlib import Path
+
+TEXT_EXT = {".py",".md",".yml",".yaml",".json",".txt",".html",".css",".js",".ts",".csv"}
+
+EXCLUDE_DIRS = {".git","__pycache__",".pytest_cache","node_modules",".venv","venv","docs/_site",".github"}
+
+def _is_text_file(path: Path) -> bool:
+    return path.suffix.lower() in TEXT_EXT
+
+def _rel(p: Path, root: Path) -> str:
+    return str(p.relative_to(root)).replace("\\","/")
+
+def _should_skip_dir(rel: str) -> bool:
+    for x in EXCLUDE_DIRS:
+        if rel == x or rel.startswith(x + "/"):
+            return True
+    return False
+
+def main() -> int:
+    repo_root = Path(os.getcwd())
+    out_dir = repo_root / "docs" / "assets" / "app"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%S")
+    out_path = out_dir / ("app-source_" + ts + ".txt")
+
+    max_file_bytes = int(os.environ.get("FD_SNAPSHOT_MAX_FILE_BYTES","600000") or "600000")
+
+    lines = []
+    lines.append("FD_APP_SOURCE_V1")
+    lines.append("timestamp_utc: " + ts)
+    lines.append("root: /")
+    lines.append("")
+
+    for dp, dn, fn in os.walk(repo_root):
+        rel_dir = _rel(Path(dp), repo_root)
+        if rel_dir == ".":
+            rel_dir = ""
+        if _should_skip_dir(rel_dir):
+            dn[:] = []
+            continue
+        dn[:] = [d for d in dn if not _should_skip_dir((rel_dir + "/" + d).strip("/"))]
+        for f in fn:
+            p = Path(dp) / f
+            rel = _rel(p, repo_root)
+            if rel.startswith("docs/assets/app/app-source_"):
+                continue
+            if not _is_text_file(p):
+                continue
+            try:
+                if p.stat().st_size > max_file_bytes:
+                    continue
+            except Exception:
+                continue
+            try:
+                content = p.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                continue
+            lines.append("FILE: " + rel)
+            lines.append("<<<")
+            lines.extend(content.replace("\r\n","\n").replace("\r","\n").split("\n"))
+            if not content.endswith("\n"):
+                lines.append("")
+            lines.append(">>>")
+            lines.append("")
+
+    out_path.write_text("\n".join(lines), encoding="utf-8")
+    print("FD_OK: wrote " + str(out_path))
+    return 0
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
+>>>
