@@ -59,6 +59,7 @@ def main() -> int:
 
     artifacts = Path(tempfile.mkdtemp(prefix="fd_build_artifacts_"))
     _write(artifacts / "milestone_issue.txt", body)
+    subprocess.check_call(["python3","tools/fd_auto_make_snapshot.py"], cwd=repo_root)
 
     # 1) Plan (PM): FD_PATCH_V1 handoff-only
     pm_prompt = open("agent_guides/ROLE_PM.txt","r",encoding="utf-8",errors="ignore").read() if os.path.exists("agent_guides/ROLE_PM.txt") else "ROLE: PM\nOutput FD_PATCH_V1 with handoff files only.\n"
@@ -120,6 +121,7 @@ def main() -> int:
     tests_parts = _call_bundle(tests_prompt, artifacts / "tests_bundle")
     tests_patch = parse_bundle_parts(tests_parts)
     apply_patch(tests_patch, repo_root)
+    subprocess.check_call(["python3","tools/fd_auto_make_snapshot.py"], cwd=repo_root)
 
 # 3) (Optional) docs and tests are deferred; this build flow only creates app branch from code bundle.
     # Users run Tune flow to add docs/tests using branch input and extra env keys.

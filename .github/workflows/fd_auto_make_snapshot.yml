@@ -1,0 +1,29 @@
+name: FD Auto - Make Snapshot (Manual)
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Make snapshot
+        env:
+          FD_SNAPSHOT_MAX_FILE_BYTES: "600000"
+        run: |
+          python3 tools/fd_auto_make_snapshot.py
+          git config user.name "fd-auto-bot"
+          git config user.email "fd-auto-bot@users.noreply.github.com"
+          if [ -n "$(git status --porcelain)" ]; then
+            git add docs/assets/app/app-source_*.txt
+            git commit -m "FD snapshot"
+            git push
+          fi
