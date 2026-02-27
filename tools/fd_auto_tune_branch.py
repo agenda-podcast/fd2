@@ -23,6 +23,13 @@ from src.fd_auto.actions_api import (
 )
 from src.fd_auto.gemini_client import call_gemini
 
+def _preview(s: str, n: int = 600) -> str:
+    t = (s or "").replace("\r\n","\n").replace("\r","\n")
+    t = t.replace("\n", " ")
+    if len(t) > n:
+        return t[:n] + "..."
+    return t
+
 def _step(msg: str) -> None:
     print("FD_STEP: " + msg)
 
@@ -91,17 +98,25 @@ def _upload_snapshot_chunks(snapshot_text: str, out_dir: Path) -> None:
 
 def _call_gemini_diff(prompt: str, artifacts: Path, label: str) -> str:
     _step("gemini_call_begin label=" + label + " prompt_chars=" + str(len(prompt)))
+    _step("gemini_prompt_preview label=" + label + " text=" + _preview(prompt))
+    _step("gemini_prompt_file label=" + label + " path=" + str(artifacts / (label + "_prompt.txt")) )
     _write(artifacts / (label + "_prompt.txt"), prompt)
     resp = call_gemini(prompt, timeout_s=900)
     _write(artifacts / (label + "_response.txt"), resp)
+    _step("gemini_response_preview label=" + label + " text=" + _preview(resp))
+    _step("gemini_response_file label=" + label + " path=" + str(artifacts / (label + "_response.txt")) )
     _step("gemini_call_end label=" + label + " resp_chars=" + str(len(resp)))
     return resp
 
 def _call_gemini_bundle(prompt: str, artifacts: Path, label: str) -> str:
     _step("gemini_call_begin label=" + label + " prompt_chars=" + str(len(prompt)))
+    _step("gemini_prompt_preview label=" + label + " text=" + _preview(prompt))
+    _step("gemini_prompt_file label=" + label + " path=" + str(artifacts / (label + "_prompt.txt")) )
     _write(artifacts / (label + "_prompt.txt"), prompt)
     resp = call_gemini(prompt, timeout_s=900)
     _write(artifacts / (label + "_response.txt"), resp)
+    _step("gemini_response_preview label=" + label + " text=" + _preview(resp))
+    _step("gemini_response_file label=" + label + " path=" + str(artifacts / (label + "_response.txt")) )
     _step("gemini_call_end label=" + label + " resp_chars=" + str(len(resp)))
     return resp
 
@@ -253,6 +268,7 @@ def main() -> int:
             prompt = ""
             prompt += "You are fixing a GitHub repo so that a workflow passes.\n"
             prompt += "Return ONLY a unified diff that `git apply` can apply. Start with: diff --git\n"
+            prompt += "FIRST LINE MUST BE: diff --git a/FILE b/FILE\n"
             prompt += "REQUIREMENTS:\n"
             prompt += "- Use minimal hunks (like --unified=0). Avoid including blank context lines.\n"
             prompt += "- Hunk headers (@@ -a,b +c,d @@) must match the number of following +/-/space lines.\n"
@@ -314,6 +330,35 @@ def main() -> int:
             if diff.strip() == "":
                 _write(artifacts / ("fix_diff_missing_attempt_" + str(attempt) + ".txt"), diff_text[:8000] + "\n")
                 _step("diff_missing attempt=" + str(attempt))
+                diff_fail_count += 1
+                # Fallback: request FILE bundle immediately when diff is missing.
+                bprompt = ""
+                bprompt += "Return ONLY FILE bundle blocks. No prose.\n"
+                bprompt += "FORMAT:\nFILE: path\n<<<\n<content>\n>>>\n\n"
+                bprompt += "Change ONLY minimal files needed.\n"
+                bprompt += "branch: " + branch + "\nworkflow_file: " + workflow_file + "\n"
+                bprompt += "\nWORKFLOW_LOGS\n" + logs_text[:200000] + "\n"
+                if apply_err.strip() != "":
+                    bprompt += "\nPREVIOUS_GIT_APPLY_ERROR\n" + apply_err + "\n"
+                if apply_failed_context.strip() != "":
+                    bprompt += "\nCURRENT_FILE_CONTEXT\n" + apply_failed_context[:120000] + "\n"
+                bundle_text = _call_gemini_bundle(bprompt, artifacts, "bundle_after_diff_missing_" + str(attempt))
+                okb = _apply_file_bundle(bundle_text, Path(wt_dir), artifacts, "bundle_after_diff_missing_" + str(attempt))
+                if okb:
+                    _step("bundle_apply_ok attempt=" + str(attempt))
+                    subprocess.check_call(["git","add","-A"], cwd=str(wt_dir))
+                    try:
+                        subprocess.check_call(["git","commit","-m","FD tune bundle attempt " + str(attempt)], cwd=str(wt_dir))
+                    except Exception:
+                        pass
+                    pushb = _run(["git","push","--force-with-lease"], str(wt_dir))
+                    _write(artifacts / ("git_push_bundle_attempt_" + str(attempt) + ".log"), pushb.stdout)
+                    if pushb.returncode == 0:
+                        _step("git_push_ok attempt=" + str(attempt))
+                        diff_fail_count = 0
+                        apply_err = ""
+                        apply_failed_context = ""
+                        continue
                 continue
 
             diff_path = artifacts / ("fix_attempt_" + str(attempt) + ".diff")
