@@ -2,6 +2,7 @@ import json
 
 from src.fd_types import ArtifactManifest, FileEntry, SCHEMA_VERSION
 from src.fd_patch_v1 import load_manifest_from_patch_text
+from src.fd_bundle_v1 import parse_bundle_parts
 
 def _as_str(x) -> str:
     if x is None:
@@ -22,6 +23,8 @@ def load_manifest_from_text(text: str) -> ArtifactManifest:
             lines = lines[:-1]
         t = "\n".join(lines).strip()
 
+    if t.startswith("FD_BUNDLE_V1"):
+        return parse_bundle_parts([t])
     if t.startswith("FD_PATCH_V1"):
         return load_manifest_from_patch_text(t)
 

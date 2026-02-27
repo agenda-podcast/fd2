@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import datetime
+import glob
 import os
 import shutil
 import sys
@@ -157,6 +158,10 @@ def main() -> int:
         if attempt > 1:
             p = p + _milestone_enforcement_block(attempt, last_err)
         out_text = call_gemini(api_key, p, timeout_s=600, model=model, endpoint_base=ep_base)
+        p_path = artifacts_dir / ("attempt_" + str(attempt) + "_prompt.txt")
+        p_path.open("w", encoding="utf-8", errors="ignore").write(p)
+        o_path = artifacts_dir / ("attempt_" + str(attempt) + "_model_output.txt")
+        o_path.open("w", encoding="utf-8", errors="ignore").write(out_text)
         if (out_text or "").strip() == "":
             last_err = "FD_FAIL: model returned empty output role=" + role + " model=" + model
             continue
@@ -167,7 +172,13 @@ def main() -> int:
             last_err = "FD_FAIL: invalid manifest json: " + str(exc)
             continue
     if manifest is None:
-        die("FD_FAIL: milestone execution failed after 3 attempts: " + last_err)
+        now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%S")
+    rel_tag_fail = "FD-FAIL-" + ms_id + "-PM-" + now
+    fail_report = artifacts_dir / "failure_report.txt"
+    fail_report.write_text("FD_MS_FAILED\nMS=" + ms_id + "\nERROR=" + last_err + "\n", encoding="utf-8")
+    attempt_files = sorted(glob.glob(str(artifacts_dir / "attempt_*")))
+    gh_release_create(rel_tag_fail, "MS FAILED " + ms_id, "FD milestone failure artifact", [str(fail_report)] + attempt_files)
+    die("FD_FAIL: milestone execution failed after 3 attempts: " + last_err)
 
     if manifest.work_item_id != ms_id:
         sys.stdout.write(
@@ -303,52 +314,38 @@ def main() -> int:
 
 
 def _validate_wi_headers(ms_id: str, wi_bodies: List[str]) -> None:
-    # Enforce small effective team and correct producer roles.
-    # Exactly 4 work items required for each milestone.
     if len(wi_bodies) != 4:
         raise RuntimeError("FD_FAIL: milestone must produce exactly 4 work items got=" + str(len(wi_bodies)))
-
     want = [
-        ("BUILDER", "REVIEWER"),
-        ("REVIEWER", "TECH_WRITER"),
-        ("TECH_WRITER", "DEVOPS"),
+        ("BUILDER", "BUILDER"),
+        ("BUILDER", "BUILDER"),
+        ("BUILDER", "DEVOPS"),
         ("DEVOPS", "OWNER"),
     ]
-
     def _fail(msg: str, body: str) -> None:
         head = "\n".join((body or "").splitlines()[:24])
         raise RuntimeError(msg + "\nFD_CONTEXT_HEAD:\n" + head)
-
-    idx = 0
-    for body in wi_bodies:
+    for idx, body in enumerate(wi_bodies):
         wi_id = _extract_field(body, "Work Item ID")
         if wi_id == "":
             _fail("FD_FAIL: WI missing Work Item ID idx=" + str(idx), body)
-
         ms = _extract_field(body, "Milestone ID")
         if ms == "":
             _fail("FD_FAIL: WI missing Milestone ID wi=" + wi_id, body)
         if ms.strip() != ms_id.strip():
             _fail("FD_FAIL: WI Milestone ID mismatch wi=" + wi_id + " got=" + ms + " expected=" + ms_id, body)
-
         prod = normalize_role_name(_extract_field(body, "Owner Role (Producer)")).upper()
         recv_raw = _extract_field(body, "Receiver Role (Next step)")
         recv = normalize_role_name(recv_raw).upper()
-        title = _extract_field(body, "Title")
-
         exp_prod, exp_recv = want[idx]
         if prod != exp_prod:
-            _fail("FD_FAIL: invalid Producer role wi=" + wi_id + " got=" + prod + " expected=" + exp_prod + " title=" + title, body)
-
+            _fail("FD_FAIL: invalid Producer role wi=" + wi_id + " got=" + prod + " expected=" + exp_prod, body)
         if exp_recv == "OWNER":
             if recv_raw.strip().upper() != "OWNER":
                 _fail("FD_FAIL: invalid Receiver role wi=" + wi_id + " got=" + recv_raw + " expected=Owner", body)
         else:
             if recv != exp_recv:
-                _fail("FD_FAIL: invalid Receiver role wi=" + wi_id + " got=" + recv + " expected=" + exp_recv + " title=" + title, body)
-
-        idx += 1
-
+                _fail("FD_FAIL: invalid Receiver role wi=" + wi_id + " got=" + recv + " expected=" + exp_recv, body)
 def _wi_title_from_body(body: str) -> str:
     wi_id = ""
     task_num = ""
