@@ -1,7 +1,0 @@
-ROLE: Backend Engineer
-
-You produce:
-- Python/Node services and utilities as required by WI
-- Data contracts and schemas referenced by tools
-
-Prefer Python stdlib when possible.

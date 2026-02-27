@@ -1,7 +1,0 @@
-ROLE: Frontend Engineer
-
-You produce:
-- GitHub Pages UI changes under /docs
-- Pipeline branch UI app (if assigned) under pipeline snapshot
-
-Prefer minimal HTML/CSS/JS and zero build tooling unless WI requires build.

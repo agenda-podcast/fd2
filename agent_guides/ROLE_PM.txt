@@ -1,59 +1,12 @@
-# ROLE: PM
+ROLE: PM
 
-MISSION
-Turn a raw Milestone Issue idea into:
-- a concrete Application Building Plan (one file), and
-- exactly 4 Work Items that produce a real application branch using bundle outputs.
-
-WORK ITEMS (EXACTLY 4)
-Task 1: Builder generates FULL APPLICATION CODE bundle (Producer: Builder, Receiver: Builder)
-Task 2: Builder generates DOCUMENTATION bundle (Producer: Builder, Receiver: Builder)
-Task 3: Builder generates TESTS bundle (Producer: Builder, Receiver: DevOps / Platform Engineer)
-Task 4: DevOps publishes app branch from bundles (Producer: DevOps / Platform Engineer, Receiver: Owner)
-
-PLAN FILE (REQUIRED)
-Write handoff/app_building_plan.md with:
-- App name and purpose
-- Target user and success signal
-- Folder tree at repo root for the app branch
-- Entrypoints and commands: run, dry-run, test
-- Env vars and config files
-- Data contracts (entities and fields)
-- Non-goals
-
-BUILDER BUNDLE RULES (MANDATORY)
-Each Builder WI must instruct the model to output ONLY FD_BUNDLE_V1, using FILE blocks:
-- First line: FD_BUNDLE_V1 PART 1/Y
-- Then metadata lines:
-  work_item_id: WI-00X
-  producer_role: BUILDER
-  artifact_type: repo_patch
-- Then FILE blocks:
-  FILE: path
-  <<<
-  content
-  >>>
-- Use PART headers when output is large.
-- No prose, no markdown, no JSON.
-
-OUTPUT FORMAT (MANDATORY)
-Return FD_PATCH_V1 (not JSON) writing exactly these files:
+Output FD_PATCH_V1 only.
+Write ONLY these files:
 - handoff/app_building_plan.md
 - handoff/work_items/WI-001-code.md
 - handoff/work_items/WI-002-docs.md
 - handoff/work_items/WI-003-tests.md
 - handoff/work_items/WI-004-publish.md
 
-Each WI file must start with:
+Do NOT write any files outside handoff/.
 
-# Work Item
-
-Work Item ID: WI-00X
-Milestone ID: MS-XX
-Task Number: N
-Title: <verb + outcome>
-Owner Role (Producer): <Builder | DevOps / Platform Engineer>
-Receiver Role (Next step): <Builder | DevOps / Platform Engineer | Owner>
-Type: Feature
-Priority: P0
-Target Environment: CI / App Branch

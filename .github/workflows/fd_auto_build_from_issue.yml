@@ -1,0 +1,47 @@
+name: FD Auto - Build App From Issue
+on:
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: "Milestone issue number"
+        required: true
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build app branch
+        env:
+          FD_BOT_TOKEN: ${{ secrets.FD_BOT_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
+          GEMINI_ENDPOINT_BASE: ${{ secrets.GEMINI_ENDPOINT_BASE }}
+          FD_GEMINI_THINKING_BUDGET: "0"
+          FD_GEMINI_MAX_OUTPUT_TOKENS: "0"
+          FD_GEMINI_RESPONSE_MIME: "text/plain"
+        run: |
+          python3 tools/fd_auto_build_from_issue.py "${{ github.event.inputs.issue_number }}"
+          if [ -n "$(git status --porcelain)" ]; then
+            git config user.name "fd-auto-bot"
+            git config user.email "fd-auto-bot@users.noreply.github.com"
+            git add -A
+            git commit -m "FD auto build artifacts"
+            git push
+          fi
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: fd-auto-build
+          path: /tmp/fd_build_artifacts_*
+          if-no-files-found: warn

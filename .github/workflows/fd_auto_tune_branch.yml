@@ -1,0 +1,48 @@
+name: FD Auto - Tune App Branch
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "App branch name"
+        required: true
+      max_attempts:
+        description: "Max tuning attempts"
+        required: true
+        default: "3"
+
+permissions:
+  contents: write
+
+jobs:
+  tune:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.branch }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Tune until green or limit
+        env:
+          FD_BOT_TOKEN: ${{ secrets.FD_BOT_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
+          GEMINI_ENDPOINT_BASE: ${{ secrets.GEMINI_ENDPOINT_BASE }}
+          FD_GEMINI_THINKING_BUDGET: "0"
+          FD_GEMINI_MAX_OUTPUT_TOKENS: "0"
+          FD_GEMINI_RESPONSE_MIME: "text/plain"
+          FD_TUNE_MAX_ATTEMPTS: ${{ github.event.inputs.max_attempts }}
+        run: |
+          git config user.name "fd-auto-bot"
+          git config user.email "fd-auto-bot@users.noreply.github.com"
+          python3 tools/fd_auto_tune_branch.py "${{ github.event.inputs.branch }}"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: fd-auto-tune
+          path: /tmp/fd_tune_artifacts_*
+          if-no-files-found: warn
