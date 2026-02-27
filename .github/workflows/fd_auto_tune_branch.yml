@@ -1,4 +1,7 @@
-inputs:
+name: FD Auto - Tune App Branch
+on:
+  workflow_dispatch:
+    inputs:
       branch:
         description: "App branch name"
         required: true
@@ -12,11 +15,6 @@ inputs:
         default: "3"
 
 permissions:
-  contents: write
-name: FD Auto - Tune App Branch
-on:
-  workflow_dispatch:
-    
   contents: write
 
 jobs:
@@ -33,14 +31,12 @@ jobs:
 
       - name: Tune until green or limit
         env:
-          FD_BOT_TOKEN: ${{ secrets.FD_BOT_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
           GEMINI_ENDPOINT_BASE: ${{ secrets.GEMINI_ENDPOINT_BASE }}
           FD_GEMINI_THINKING_BUDGET: "1024"
           FD_GEMINI_MAX_OUTPUT_TOKENS: "0"
           FD_GEMINI_RESPONSE_MIME: "text/plain"
-          FD_TUNE_MAX_ATTEMPTS: ${{ github.event.inputs.max_attempts }}
         run: |
           git config user.name "fd-auto-bot"
           git config user.email "fd-auto-bot@users.noreply.github.com"
