@@ -11,6 +11,11 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.abspath(os.getcwd()))
 
+
+def _print_step(msg: str) -> None:
+    print("FD_STEP: " + msg)
+
+
 from src.fd_auto.actions_api import dispatch_workflow, find_latest_run_id, wait_run_complete, download_run_logs_zip, extract_logs_text, resolve_workflow_file
 from src.fd_auto.gemini_client import call_gemini
 from src.fd_auto.patch_parse import parse_bundle_parts, bundle_total_parts
