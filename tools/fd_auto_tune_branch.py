@@ -5,6 +5,7 @@ import sys
 import os
 import subprocess
 import tempfile
+import traceback
 import glob
 from pathlib import Path
 
@@ -39,6 +40,32 @@ def _call_bundle(prompt: str, out_dir: Path) -> list[str]:
         _write(out_dir / ("part_" + str(cur) + ".txt"), nxt)
     _write(out_dir / "bundle_full.txt", "\n\n".join(parts))
     return parts
+
+def _get_fix_bundle_and_parse(base_prompt: str, out_dir: Path, max_tries: int = 3):
+    last_err = ""
+    for k in range(1, max_tries + 1):
+        prompt = base_prompt
+        if k > 1:
+            prompt += "\n\nFORMAT_REPAIR\nPrevious output failed to parse: " + last_err + "\n"
+            prompt += "Return ONLY FD_BUNDLE_V1 PART 1/Y.\n"
+            prompt += "The FIRST line must be: FD_BUNDLE_V1 PART 1/Y\n"
+            prompt += "Metadata lines MUST be key: value (with colon), e.g. work_item_id: WI-XYZ\n"
+            prompt += "File blocks MUST use: FILE: path (with colon)\n"
+            prompt += "Every FILE block MUST have <<< and >>>.\n"
+            prompt += "No markdown fences. No prose.\n"
+        parts = _call_bundle(prompt, out_dir / ("gen_try_" + str(k)))
+        try:
+            patch = parse_bundle_parts(parts)
+            return (patch, parts, "")
+        except Exception as exc:
+            last_err = str(exc)
+            # Save the raw output for inspection
+            try:
+                (out_dir / ("parse_error_try_" + str(k) + ".txt")).write_text(last_err + "\n", encoding="utf-8", errors="ignore")
+            except Exception:
+                pass
+            continue
+    return (None, [], last_err)
 
 def _upload_snapshot_chunks(snapshot_text: str, workflow_name: str, out_dir: Path) -> None:
     # Multi-call upload so the model can see full repo context without exceeding request size limits.
@@ -87,71 +114,122 @@ def main() -> int:
     subprocess.check_call(["git","checkout",branch])
 
     for attempt in range(1, max_attempts + 1):
-    
-        # Install deps if requirements present
-        if Path("requirements.txt").exists():
-            _run([sys.executable,"-m","pip","install","-r","requirements.txt"], repo_root)
-
-        dry = None
-        tests = None
-        if workflow_name == "dry_run_only":
-            dry = _run(["python","src/main.py","--dry-run"], repo_root)
-            _write(artifacts / ("dry_run_attempt_" + str(attempt) + ".log"), dry.stdout)
-            ok = (dry.returncode == 0)
-        elif workflow_name == "unittest_only":
-            tests = _run(["python","-m","unittest","discover","-s","tests"], repo_root)
-            _write(artifacts / ("tests_attempt_" + str(attempt) + ".log"), tests.stdout)
-            ok = (tests.returncode == 0)
-        else:
-            dry = _run(["python","src/main.py","--dry-run"], repo_root)
-            _write(artifacts / ("dry_run_attempt_" + str(attempt) + ".log"), dry.stdout)
-            tests = _run(["python","-m","unittest","discover","-s","tests"], repo_root)
-            _write(artifacts / ("tests_attempt_" + str(attempt) + ".log"), tests.stdout)
-            ok = (dry.returncode == 0 and tests.returncode == 0)
-
-        if ok:
-            print("FD_OK: green")
-            return 0
-
-        # Ask Gemini for patch
-        dry_rc = str(dry.returncode) if dry is not None else "NA"
-        dry_out = first_n_lines(dry.stdout, 200) if dry is not None else ""
-        test_rc = str(tests.returncode) if tests is not None else "NA"
-        test_out = first_n_lines(tests.stdout, 200) if tests is not None else ""
-        failing = "WORKFLOW_NAME=" + workflow_name + "\nDRY_RUN_RC=" + dry_rc + "\n" + dry_out + "\n\nTEST_RC=" + test_rc + "\n" + test_out
-        snap_dir = os.path.join(repo_root, "docs", "assets", "app")
-        snaps = sorted(glob.glob(os.path.join(snap_dir, "app-source_*.txt")))
-        snapshot_path = snaps[-1] if snaps else ""
-        snapshot_text = ""
-        if snapshot_path:
-            snapshot_text = open(snapshot_path, "r", encoding="utf-8", errors="ignore").read()
-        max_chars = int(os.environ.get("FD_SNAPSHOT_MAX_CHARS","180000") or "180000")
-        chunk_chars = int(os.environ.get("FD_SNAPSHOT_CHUNK_CHARS","50000") or "50000")
-        snapshot_snip = snapshot_text[:max_chars]
-        prompt = ""
-        prompt += "ROLE: BUILDER\n"
-        prompt += "TASK: Fix the application to make dry-run and unit tests pass.\n"
-        prompt += "OUTPUT: FD_BUNDLE_V1 PART 1/Y only. No prose. Close every FILE block.\n"
-        prompt += "You MUST include an updated full repository snapshot file at: docs/assets/app/app-source_<timestamp>.txt\n"
-        prompt += "CONTEXT: failing logs follow.\n\n" + failing + "\n\n"
-
-        _write(artifacts / ("fix_prompt_attempt_" + str(attempt) + ".txt"), prompt)
-        parts = _call_bundle(prompt, artifacts / ("fix_bundle_attempt_" + str(attempt)))
-        patch = parse_bundle_parts(parts)
-        apply_patch(patch, repo_root)
-        # If the model returned a new snapshot file, apply it by slicing into real files.
-        snap_dir2 = os.path.join(repo_root, "docs", "assets", "app")
-        snaps2 = sorted(glob.glob(os.path.join(snap_dir2, "app-source_*.txt")))
-        if snaps2:
-            newest = snaps2[-1]
-            subprocess.check_call(["python3","tools/fd_auto_apply_snapshot.py", newest], cwd=repo_root)
-
-        subprocess.check_call(["git","add","-A"])
+        # Never crash the workflow; record errors and continue.
         try:
-            subprocess.check_call(["git","commit","-m","FD tune attempt " + str(attempt)])
-        except Exception:
-            pass
-        subprocess.check_call(["git","push","--force-with-lease"])
+            # Install deps if requirements present
+            if Path("requirements.txt").exists():
+                _run([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"], repo_root)
+
+            dry = None
+            tests = None
+            if workflow_name == "dry_run_only":
+                dry = _run(["python", "src/main.py", "--dry-run"], repo_root)
+                _write(artifacts / ("dry_run_attempt_" + str(attempt) + ".log"), dry.stdout)
+                ok = (dry.returncode == 0)
+            elif workflow_name == "unittest_only":
+                tests = _run(["python", "-m", "unittest", "discover", "-s", "tests"], repo_root)
+                _write(artifacts / ("tests_attempt_" + str(attempt) + ".log"), tests.stdout)
+                ok = (tests.returncode == 0)
+            else:
+                dry = _run(["python", "src/main.py", "--dry-run"], repo_root)
+                _write(artifacts / ("dry_run_attempt_" + str(attempt) + ".log"), dry.stdout)
+                tests = _run(["python", "-m", "unittest", "discover", "-s", "tests"], repo_root)
+                _write(artifacts / ("tests_attempt_" + str(attempt) + ".log"), tests.stdout)
+                ok = (dry.returncode == 0 and tests.returncode == 0)
+
+            if ok:
+                print("FD_OK: green")
+                return 0
+
+            dry_rc = str(dry.returncode) if dry is not None else "NA"
+            dry_out = first_n_lines(dry.stdout, 200) if dry is not None else ""
+            test_rc = str(tests.returncode) if tests is not None else "NA"
+            test_out = first_n_lines(tests.stdout, 200) if tests is not None else ""
+            failing = "WORKFLOW_NAME=" + workflow_name + "\nDRY_RUN_RC=" + dry_rc + "\n" + dry_out + "\n\nTEST_RC=" + test_rc + "\n" + test_out
+
+            snap_dir = os.path.join(repo_root, "docs", "assets", "app")
+            snaps = sorted(glob.glob(os.path.join(snap_dir, "app-source_*.txt")))
+            snapshot_path = snaps[-1] if snaps else ""
+            snapshot_text = ""
+            if snapshot_path:
+                snapshot_text = open(snapshot_path, "r", encoding="utf-8", errors="ignore").read()
+
+            # Upload full snapshot in multiple calls (ACK-only) so the model sees full context.
+            _upload_snapshot_chunks(snapshot_text, workflow_name, artifacts / ("snapshot_upload_attempt_" + str(attempt)))
+
+            prompt = ""
+            prompt += "ROLE: BUILDER\n"
+            prompt += "TASK: Fix the application to make the selected workflow pass.\n"
+            prompt += "WORKFLOW_NAME=" + workflow_name + "\n"
+            prompt += "OUTPUT: FD_BUNDLE_V1 PART 1/Y only. No prose.\n"
+            prompt += "FORMAT RULES:\n"
+            prompt += "- First line must be: FD_BUNDLE_V1 PART 1/Y\n"
+            prompt += "- Metadata lines must be key: value\n"
+            prompt += "- File blocks must be: FILE: path (with colon) then <<< then content then >>>\n"
+            prompt += "- Close every FILE block with >>>\n"
+            prompt += "- Do NOT output markdown fences\n"
+            prompt += "You MUST include an updated snapshot file: docs/assets/app/app-source_<timestamp>.txt\n"
+            prompt += "\nFAIL_LOGS\n" + failing + "\n"
+
+            _write(artifacts / ("fix_prompt_attempt_" + str(attempt) + ".txt"), prompt)
+
+            patch, parts, perr = _get_fix_bundle_and_parse(prompt, artifacts / ("fix_bundle_attempt_" + str(attempt)), max_tries=3)
+            if patch is None:
+                _write(artifacts / ("fix_parse_failed_attempt_" + str(attempt) + ".txt"), perr + "\n")
+                continue
+
+            apply_patch(patch, repo_root)
+
+            # If model returned a new snapshot file, apply it by slicing into real files.
+            snaps2 = sorted(glob.glob(os.path.join(snap_dir, "app-source_*.txt")))
+            if snaps2:
+                newest = snaps2[-1]
+                subprocess.check_call(["python3", "tools/fd_auto_apply_snapshot.py", newest], cwd=repo_root)
+
+            subprocess.check_call(["git", "add", "-A"])
+            try:
+                subprocess.check_call(["git", "commit", "-m", "FD tune attempt " + str(attempt)])
+            except Exception:
+                pass
+            subprocess.check_call(["git", "push", "--force-with-lease"])
+        except Exception as exc:
+            _write(artifacts / ("unexpected_exception_attempt_" + str(attempt) + ".txt"), traceback.format_exc() + "\n")
+            # Attempt self-repair via Gemini using the exception traceback.
+            try:
+                snap_dir = os.path.join(repo_root, "docs", "assets", "app")
+                snaps = sorted(glob.glob(os.path.join(snap_dir, "app-source_*.txt")))
+                snapshot_path = snaps[-1] if snaps else ""
+                snapshot_text = ""
+                if snapshot_path:
+                    snapshot_text = open(snapshot_path, "r", encoding="utf-8", errors="ignore").read()
+                _upload_snapshot_chunks(snapshot_text, workflow_name, artifacts / ("snapshot_upload_exception_attempt_" + str(attempt)))
+                repair = ""
+                repair += "ROLE: BUILDER\n"
+                repair += "TASK: Fix the repository so the tuning workflow and the selected app checks can run.\n"
+                repair += "WORKFLOW_NAME=" + workflow_name + "\n"
+                repair += "OUTPUT: FD_BUNDLE_V1 PART 1/Y only. No prose.\n"
+                repair += "You MUST include an updated snapshot file: docs/assets/app/app-source_<timestamp>.txt\n"
+                repair += "\nEXCEPTION_TRACEBACK\n" + first_n_lines(traceback.format_exc(), 400) + "\n"
+                _write(artifacts / ("self_repair_prompt_attempt_" + str(attempt) + ".txt"), repair)
+                patch2, parts2, perr2 = _get_fix_bundle_and_parse(repair, artifacts / ("self_repair_bundle_attempt_" + str(attempt)), max_tries=3)
+                if patch2 is not None:
+                    apply_patch(patch2, repo_root)
+                    snaps3 = sorted(glob.glob(os.path.join(snap_dir, "app-source_*.txt")))
+                    if snaps3:
+                        newest3 = snaps3[-1]
+                        subprocess.check_call(["python3", "tools/fd_auto_apply_snapshot.py", newest3], cwd=repo_root)
+                    subprocess.check_call(["git", "add", "-A"])
+                    try:
+                        subprocess.check_call(["git", "commit", "-m", "FD self-repair attempt " + str(attempt)])
+                    except Exception:
+                        pass
+                    subprocess.check_call(["git", "push", "--force-with-lease"])
+            except Exception as exc2:
+                _write(artifacts / ("self_repair_exception_attempt_" + str(attempt) + ".txt"), traceback.format_exc() + "\n")
+            continue
+
+
+
     print("FD_FAIL: tuning attempts exhausted")
     return 1
 
