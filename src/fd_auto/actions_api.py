@@ -4,7 +4,7 @@ import os
 import time
 import urllib.request
 import zipfile
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List
 
 def _repo() -> str:
     r = (os.environ.get("GITHUB_REPOSITORY") or "").strip()
@@ -34,10 +34,8 @@ def _post_json(url: str, token: str, payload: Dict[str, Any]) -> None:
 def dispatch_workflow(workflow_file: str, ref: str, inputs: Dict[str, str], token: str) -> None:
     repo = _repo()
     wf = workflow_file.strip()
-    if wf == "":
-        raise RuntimeError("FD_FAIL: workflow_file empty")
     url = f"https://api.github.com/repos/{repo}/actions/workflows/{wf}/dispatches"
-    payload = {"ref": ref}
+    payload: Dict[str, Any] = {"ref": ref}
     if inputs:
         payload["inputs"] = inputs
     _post_json(url, token, payload)
@@ -46,7 +44,6 @@ def find_latest_run_id(workflow_file: str, branch: str, not_before_epoch: float,
     repo = _repo()
     wf = workflow_file.strip()
     deadline = time.time() + timeout_s
-    last_seen = 0
     while time.time() < deadline:
         url = f"https://api.github.com/repos/{repo}/actions/workflows/{wf}/runs?per_page=20&branch={branch}&event=workflow_dispatch"
         data = _get_json(url, token)
@@ -55,33 +52,28 @@ def find_latest_run_id(workflow_file: str, branch: str, not_before_epoch: float,
             for r in runs:
                 if not isinstance(r, dict):
                     continue
-                created = r.get("created_at") or ""
+                created = str(r.get("created_at") or "")
                 run_id = int(r.get("id") or 0)
                 if run_id <= 0:
                     continue
-                # created_at is ISO; compare by epoch via time.strptime rough
                 try:
-                    # 2026-02-27T00:00:00Z
                     tt = time.strptime(created, "%Y-%m-%dT%H:%M:%SZ")
                     epoch = time.mktime(tt)
                 except Exception:
                     epoch = 0
-                if epoch >= not_before_epoch and run_id > last_seen:
+                if epoch >= not_before_epoch:
                     return run_id
-                last_seen = max(last_seen, run_id)
         time.sleep(3)
     raise RuntimeError("FD_FAIL: could not find workflow run for " + wf + " branch=" + branch)
 
-def wait_run_complete(run_id: int, token: str, timeout_s: int = 1800) -> Dict[str, Any]:
+def wait_run_complete(run_id: int, token: str, timeout_s: int = 3600) -> Dict[str, Any]:
     repo = _repo()
     deadline = time.time() + timeout_s
     while time.time() < deadline:
         url = f"https://api.github.com/repos/{repo}/actions/runs/{run_id}"
         data = _get_json(url, token)
         if isinstance(data, dict):
-            status = str(data.get("status") or "")
-            conclusion = str(data.get("conclusion") or "")
-            if status == "completed":
+            if str(data.get("status") or "") == "completed":
                 return data
         time.sleep(5)
     raise RuntimeError("FD_FAIL: workflow run timeout run_id=" + str(run_id))
@@ -93,10 +85,11 @@ def download_run_logs_zip(run_id: int, token: str) -> bytes:
     with urllib.request.urlopen(req, timeout=120) as resp:
         return resp.read()
 
-def extract_logs_text(logs_zip: bytes, max_chars: int = 200000) -> str:
+def extract_logs_text(logs_zip: bytes, max_chars: int = 400000) -> str:
     buf = io.BytesIO(logs_zip)
     z = zipfile.ZipFile(buf, "r")
     texts: List[str] = []
+    total = 0
     for name in z.namelist():
         if not name.endswith(".txt"):
             continue
@@ -104,37 +97,28 @@ def extract_logs_text(logs_zip: bytes, max_chars: int = 200000) -> str:
             data = z.read(name).decode("utf-8", errors="ignore")
         except Exception:
             continue
-        texts.append("### " + name + "\n" + data)
-        if sum(len(x) for x in texts) > max_chars:
+        block = "### " + name + "\n" + data
+        texts.append(block)
+        total += len(block)
+        if total > max_chars:
             break
     out = "\n\n".join(texts)
     if len(out) > max_chars:
         out = out[:max_chars]
     return out
 
-
-def list_workflows(token: str) -> List[Dict[str, Any]]:
+def list_run_artifacts(run_id: int, token: str) -> List[Dict[str, Any]]:
     repo = _repo()
-    url = f"https://api.github.com/repos/{repo}/actions/workflows?per_page=100"
+    url = f"https://api.github.com/repos/{repo}/actions/runs/{run_id}/artifacts?per_page=100"
     data = _get_json(url, token)
-    wfs = data.get("workflows") if isinstance(data, dict) else None
-    if isinstance(wfs, list):
-        return [w for w in wfs if isinstance(w, dict)]
+    arts = data.get("artifacts") if isinstance(data, dict) else None
+    if isinstance(arts, list):
+        return [a for a in arts if isinstance(a, dict)]
     return []
 
-def resolve_workflow_file(user_value: str, token: str) -> str:
-    v = (user_value or "").strip()
-    if v.endswith(".yml") or v.endswith(".yaml"):
-        return v
-    if v.startswith(".github/workflows/"):
-        return v.replace(".github/workflows/","")
-    wfs = list_workflows(token)
-    for w in wfs:
-        if str(w.get("name") or "") == v:
-            p = str(w.get("path") or "")
-            return p.replace(".github/workflows/","")
-    for w in wfs:
-        p = str(w.get("path") or "")
-        if p.endswith("/" + v):
-            return v
-    return v
+def download_artifact_zip(artifact_id: int, token: str) -> bytes:
+    repo = _repo()
+    url = f"https://api.github.com/repos/{repo}/actions/artifacts/{artifact_id}/zip"
+    req = urllib.request.Request(url, headers=_headers(token), method="GET")
+    with urllib.request.urlopen(req, timeout=120) as resp:
+        return resp.read()

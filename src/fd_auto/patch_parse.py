@@ -88,9 +88,9 @@ def parse_fd_patch_v1(text: str) -> Patch:
     wi = meta.get("work_item_id","").strip()
     prod = meta.get("producer_role","").strip()
     if wi == "":
-        wi = "WI-AUTO-TUNE"
+        _fail("missing work_item_id")
     if prod == "":
-        prod = "BUILDER"
+        _fail("missing producer_role")
     if not files:
         _fail("no FILE blocks")
     return Patch(kind="patch", work_item_id=wi, producer_role=prod, files=files, delete=delete)

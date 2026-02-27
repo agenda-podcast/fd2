@@ -6,14 +6,14 @@ on:
         description: "Target branch name to tune"
         required: true
       workflow_file:
-        description: "Workflow file path in .github/workflows (e.g., build.yml)"
+        description: "Workflow file name in .github/workflows (e.g., fd_auto_build_from_issue.yml)"
         required: true
       max_attempts:
         description: "Number of tuning interactions"
         required: true
-        default: "10"
+        default: "5"
       workflow_inputs:
-        description: "Optional inputs for dispatched workflow (key=value lines)"
+        description: "Optional workflow inputs (key=value per line)"
         required: false
         default: ""
 
@@ -34,7 +34,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Tune using real workflow logs
+      - name: Tune by observing real workflow
         env:
           FD_BOT_TOKEN: ${{ secrets.FD_BOT_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -43,7 +43,6 @@ jobs:
           FD_GEMINI_THINKING_BUDGET: "1024"
           FD_GEMINI_MAX_OUTPUT_TOKENS: "0"
           FD_GEMINI_RESPONSE_MIME: "text/plain"
-          FD_SNAPSHOT_MAX_FILE_BYTES: "600000"
           FD_SNAPSHOT_MAX_CHARS: "180000"
           FD_SNAPSHOT_CHUNK_CHARS: "50000"
         run: |
