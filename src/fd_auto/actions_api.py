@@ -3,7 +3,13 @@ import json
 import os
 import time
 import urllib.request
+import urllib.error
+
 import zipfile
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
 from typing import Any, Dict, List
 
 def _repo() -> str:
@@ -120,5 +126,16 @@ def download_artifact_zip(artifact_id: int, token: str) -> bytes:
     repo = _repo()
     url = f"https://api.github.com/repos/{repo}/actions/artifacts/{artifact_id}/zip"
     req = urllib.request.Request(url, headers=_headers(token), method="GET")
-    with urllib.request.urlopen(req, timeout=120) as resp:
-        return resp.read()
+    opener = urllib.request.build_opener(_NoRedirect)
+    try:
+        with opener.open(req, timeout=120) as resp:
+            return resp.read()
+    except urllib.error.HTTPError as e:
+        # GitHub returns 302 to a signed URL; follow it without auth headers.
+        if e.code in (301, 302, 303, 307, 308):
+            loc = e.headers.get("Location") or e.headers.get("location") or ""
+            if loc:
+                req2 = urllib.request.Request(loc, method="GET")
+                with urllib.request.urlopen(req2, timeout=120) as resp2:
+                    return resp2.read()
+        raise

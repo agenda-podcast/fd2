@@ -115,8 +115,11 @@ def main() -> int:
     workflow_inputs = sys.argv[4] if len(sys.argv) > 4 else ""
 
     token = (os.environ.get("FD_BOT_TOKEN") or "").strip()
+    actions_token = (os.environ.get("GITHUB_TOKEN") or "").strip()
     if token == "":
         raise RuntimeError("FD_FAIL: missing FD_BOT_TOKEN")
+    if actions_token == "":
+        raise RuntimeError("FD_FAIL: missing GITHUB_TOKEN")
 
     if max_attempts < 1:
         max_attempts = 1
@@ -139,22 +142,22 @@ def main() -> int:
             # Dispatch target workflow
             start_epoch = time.time()
             _step("dispatch_workflow file=" + workflow_file + " ref=" + branch + " inputs=" + str(inputs))
-            dispatch_workflow(workflow_file, branch, inputs, token)
+            dispatch_workflow(workflow_file, branch, inputs, actions_token)
 
-            run_id = find_latest_run_id(workflow_file, branch, start_epoch - 5, token, timeout_s=180)
+            run_id = find_latest_run_id(workflow_file, branch, start_epoch - 5, actions_token, timeout_s=180)
             _step("workflow_run_found run_id=" + str(run_id))
-            run_info = wait_run_complete(run_id, token, timeout_s=3600)
+            run_info = wait_run_complete(run_id, actions_token, timeout_s=3600)
             status = str(run_info.get("status") or "")
             conclusion = str(run_info.get("conclusion") or "")
             html_url = str(run_info.get("html_url") or "")
             _step("workflow_run_completed run_id=" + str(run_id) + " status=" + status + " conclusion=" + conclusion)
 
-            logs_zip = download_run_logs_zip(run_id, token)
+            logs_zip = download_run_logs_zip(run_id, actions_token)
             logs_text = extract_logs_text(logs_zip, max_chars=350000)
             _write(artifacts / ("run_" + str(run_id) + "_attempt_" + str(attempt) + ".log"), logs_text)
 
             # Download run artifacts
-            arts = list_run_artifacts(run_id, token)
+            arts = list_run_artifacts(run_id, actions_token)
             _write(artifacts / ("run_" + str(run_id) + "_artifacts.json"), str(arts) + "\n")
             for a in arts:
                 aid = int(a.get("id") or 0)
@@ -162,7 +165,7 @@ def main() -> int:
                 if aid <= 0:
                     continue
                 _step("download_artifact name=" + name + " id=" + str(aid))
-                blob = download_artifact_zip(aid, token)
+                blob = download_artifact_zip(aid, actions_token)
                 outp = artifacts / ("run_" + str(run_id) + "_artifact_" + name + ".zip")
                 outp.write_bytes(blob)
 

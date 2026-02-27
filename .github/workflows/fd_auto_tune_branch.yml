@@ -37,6 +37,7 @@ jobs:
       - name: Tune by observing real workflow
         env:
           FD_BOT_TOKEN: ${{ secrets.FD_BOT_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
           GEMINI_ENDPOINT_BASE: ${{ secrets.GEMINI_ENDPOINT_BASE }}
