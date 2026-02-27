@@ -107,6 +107,9 @@ def main() -> int:
 
     repo_root = os.getcwd()
     max_attempts = max_attempts_arg
+    if max_attempts < 1:
+        max_attempts = 1
+    print("FD_DEBUG: tune_config branch=" + branch + " workflow_name=" + workflow_name + " max_attempts=" + str(max_attempts))
 
     artifacts = Path(tempfile.mkdtemp(prefix="fd_tune_artifacts_"))
     _write(artifacts / "branch.txt", branch + "\n")
@@ -114,6 +117,7 @@ def main() -> int:
     subprocess.check_call(["git","checkout",branch])
 
     for attempt in range(1, max_attempts + 1):
+        print("FD_DEBUG: attempt_begin " + str(attempt) + "/" + str(max_attempts))
         # Never crash the workflow; record errors and continue.
         try:
             # Install deps if requirements present
@@ -139,6 +143,7 @@ def main() -> int:
 
             if ok:
                 print("FD_OK: green")
+                print("FD_DEBUG: attempt_success " + str(attempt))
                 return 0
 
             dry_rc = str(dry.returncode) if dry is not None else "NA"
@@ -176,6 +181,7 @@ def main() -> int:
             patch, parts, perr = _get_fix_bundle_and_parse(prompt, artifacts / ("fix_bundle_attempt_" + str(attempt)), max_tries=3)
             if patch is None:
                 _write(artifacts / ("fix_parse_failed_attempt_" + str(attempt) + ".txt"), perr + "\n")
+                print("FD_WARN: fix_parse_failed attempt=" + str(attempt))
                 continue
 
             apply_patch(patch, repo_root)

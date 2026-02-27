@@ -12,8 +12,7 @@ on:
       max_attempts:
         description: "Number of tuning interactions"
         required: true
-        default: "3"
-
+        default: "10"
 permissions:
   contents: write
 
@@ -24,6 +23,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.branch }}
+
+      - name: Echo inputs
+        run: |
+          echo "branch=${{ github.event.inputs.branch }}"
+          echo "workflow_name=${{ github.event.inputs.workflow_name }}"
+          echo "max_attempts=${{ github.event.inputs.max_attempts }}"
 
       - uses: actions/setup-python@v5
         with:
