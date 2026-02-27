@@ -97,6 +97,45 @@ def _call_gemini_diff(prompt: str, artifacts: Path, label: str) -> str:
     _step("gemini_call_end label=" + label + " resp_chars=" + str(len(resp)))
     return resp
 
+def _call_gemini_bundle(prompt: str, artifacts: Path, label: str) -> str:
+    _step("gemini_call_begin label=" + label + " prompt_chars=" + str(len(prompt)))
+    _write(artifacts / (label + "_prompt.txt"), prompt)
+    resp = call_gemini(prompt, timeout_s=900)
+    _write(artifacts / (label + "_response.txt"), resp)
+    _step("gemini_call_end label=" + label + " resp_chars=" + str(len(resp)))
+    return resp
+
+def _apply_file_bundle(bundle_text: str, repo_dir: Path, artifacts: Path, label: str) -> bool:
+    t = (bundle_text or "").replace("\r\n","\n").replace("\r","\n")
+    ls = t.split("\n")
+    i = 0
+    wrote = 0
+    while i < len(ls):
+        line = ls[i].strip()
+        if line.startswith("FILE:"):
+            path = line.split(":",1)[1].strip()
+            i += 1
+            if i >= len(ls) or ls[i].strip() != "<<<":
+                _write(artifacts / (label + "_bundle_parse_fail.txt"), "missing <<< for " + path + "\n")
+                return False
+            i += 1
+            content = []
+            while i < len(ls) and ls[i].strip() != ">>>":
+                content.append(ls[i])
+                i += 1
+            if i >= len(ls):
+                _write(artifacts / (label + "_bundle_parse_fail.txt"), "missing >>> for " + path + "\n")
+                return False
+            i += 1
+            outp = repo_dir / path
+            outp.parent.mkdir(parents=True, exist_ok=True)
+            outp.write_text("\n".join(content) + "\n", encoding="utf-8", errors="ignore")
+            wrote += 1
+            continue
+        i += 1
+    _write(artifacts / (label + "_bundle_applied.txt"), "files_written=" + str(wrote) + "\n")
+    return wrote > 0
+
 def _extract_failed_paths(git_apply_log: str) -> List[str]:
     paths: List[str] = []
     for line in (git_apply_log or "").splitlines():
@@ -166,6 +205,7 @@ def main() -> int:
 
     inputs = _parse_inputs(workflow_inputs)
     apply_err = ""
+    diff_fail_count = 0
     apply_failed_context = ""
     apply_failed_context = ""
 
@@ -235,6 +275,40 @@ def main() -> int:
             prompt += "\nRUN_ARTIFACTS\n"
             prompt += str([str(x.get("name") or "") for x in arts]) + "\n"
 
+            if diff_fail_count >= 2:
+                bprompt = ""
+                bprompt += "Return ONLY FILE bundle blocks. No prose.\n"
+                bprompt += "FORMAT:\nFILE: path\n<<<\n<content>\n>>>\n\n"
+                bprompt += "Change ONLY minimal files needed.\n"
+                bprompt += "branch: " + branch + "\nworkflow_file: " + workflow_file + "\n"
+                bprompt += "\nWORKFLOW_LOGS\n" + logs_text[:200000] + "\n"
+                if apply_err.strip() != "":
+                    bprompt += "\nPREVIOUS_GIT_APPLY_ERROR\n" + apply_err + "\n"
+                if apply_failed_context.strip() != "":
+                    bprompt += "\nCURRENT_FILE_CONTEXT\n" + apply_failed_context[:120000] + "\n"
+                bundle_text = _call_gemini_bundle(bprompt, artifacts, "bundle_attempt_" + str(attempt))
+                okb = _apply_file_bundle(bundle_text, Path(wt_dir), artifacts, "bundle_attempt_" + str(attempt))
+                if not okb:
+                    _step("bundle_apply_failed attempt=" + str(attempt))
+                    diff_fail_count += 1
+                    continue
+                _step("bundle_apply_ok attempt=" + str(attempt))
+                subprocess.check_call(["git","add","-A"], cwd=str(wt_dir))
+                try:
+                    subprocess.check_call(["git","commit","-m","FD tune bundle attempt " + str(attempt)], cwd=str(wt_dir))
+                except Exception:
+                    pass
+                pushb = _run(["git","push","--force-with-lease"], str(wt_dir))
+                _write(artifacts / ("git_push_bundle_attempt_" + str(attempt) + ".log"), pushb.stdout)
+                if pushb.returncode != 0:
+                    _step("git_push_failed attempt=" + str(attempt))
+                    continue
+                _step("git_push_ok attempt=" + str(attempt))
+                diff_fail_count = 0
+                apply_err = ""
+                apply_failed_context = ""
+                continue
+
             diff_text = _call_gemini_diff(prompt, artifacts, "fix_attempt_" + str(attempt))
             diff = _extract_diff(diff_text)
             if diff.strip() == "":
@@ -259,8 +333,10 @@ def main() -> int:
                 apply_failed_context = "\n".join(ctx_parts)
                 _write(artifacts / ("git_apply_failed_context_attempt_" + str(attempt) + ".txt"), apply_failed_context)
                 _step("git_apply_failed attempt=" + str(attempt))
+                diff_fail_count += 1
                 continue
             _step("git_apply_ok attempt=" + str(attempt))
+            diff_fail_count = 0
 
             subprocess.check_call(["git","add","-A"], cwd=str(wt_dir))
             try:
