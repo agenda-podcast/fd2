@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 import datetime
+import sys
+
 import os
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
+
+sys.path.insert(0, os.path.abspath(os.getcwd()))
 
 from src.fd_auto.github_api import get_issue, create_comment
 from src.fd_auto.util import require_env, extract_field, slugify

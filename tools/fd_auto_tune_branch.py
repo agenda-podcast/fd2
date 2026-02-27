@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 import datetime
+import sys
+
 import os
 import subprocess
 import tempfile
 from pathlib import Path
+
+sys.path.insert(0, os.path.abspath(os.getcwd()))
 
 from src.fd_auto.gemini_client import call_gemini
 from src.fd_auto.patch_parse import parse_bundle_parts, bundle_total_parts
