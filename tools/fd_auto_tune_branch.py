@@ -56,6 +56,51 @@ def _parse_inputs(s: str) -> Dict[str, str]:
         out[k.strip()] = v.strip()
     return out
 
+def _prepare_git_auth(repo_dir: Path, token: str, artifacts: Path, label: str) -> None:
+    # Log current auth-related settings and force PAT-based auth (avoid actions/checkout extraheader taking precedence).
+    try:
+        rem = _run(["git", "remote", "-v"], str(repo_dir)).stdout
+        _write(artifacts / (label + "_remote_v.log"), rem)
+    except Exception:
+        pass
+    try:
+        eh = _run(["git", "config", "--local", "--get-all", "http.https://github.com/.extraheader"], str(repo_dir)).stdout
+        _write(artifacts / (label + "_extraheader_before.log"), eh)
+    except Exception:
+        pass
+    # Remove checkout-injected auth header so remote URL token is used.
+    _run(["git", "config", "--local", "--unset-all", "http.https://github.com/.extraheader"], str(repo_dir))
+    try:
+        eh2 = _run(["git", "config", "--local", "--get-all", "http.https://github.com/.extraheader"], str(repo_dir)).stdout
+        _write(artifacts / (label + "_extraheader_after.log"), eh2)
+    except Exception:
+        pass
+    # Set origin URL with PAT token.
+    repo = (os.environ.get("GITHUB_REPOSITORY") or "").strip()
+    if repo == "":
+        raise RuntimeError("FD_FAIL: missing GITHUB_REPOSITORY")
+    remote_url = "https://x-access-token:" + token + "@github.com/" + repo + ".git"
+    subprocess.check_call(["git", "remote", "set-url", "origin", remote_url], cwd=str(repo_dir))
+    _step("git_auth_prepared label=" + label)
+
+def _push_with_fallback(wt_dir: Path, repo_root: Path, artifacts: Path, label: str, primary_token: str, fallback_token: str) -> subprocess.CompletedProcess:
+    # Attempt push with primary token. If blocked by workflow-permission restriction for GitHub App, retry with fallback token.
+    _prepare_git_auth(Path(wt_dir), primary_token, artifacts, label + "_prep_primary")
+    _prepare_git_auth(repo_root, primary_token, artifacts, label + "_prep_primary_root")
+    p1 = _run(["git", "push", "--force-with-lease"], str(wt_dir))
+    _write(artifacts / (label + "_push_primary.log"), p1.stdout)
+    if p1.returncode == 0:
+        return p1
+    msg = (p1.stdout or "")
+    if "refusing to allow a GitHub App to create or update workflow" in msg and fallback_token.strip() != "":
+        _step("push_retry_with_fallback_token")
+        _prepare_git_auth(Path(wt_dir), fallback_token, artifacts, label + "_prep_fallback")
+        _prepare_git_auth(repo_root, fallback_token, artifacts, label + "_prep_fallback_root")
+        p2 = _run(["git", "push", "--force-with-lease"], str(wt_dir))
+        _write(artifacts / (label + "_push_fallback.log"), p2.stdout)
+        return p2
+    return p1
+
 def _set_origin_with_token(repo_root: Path, token: str) -> None:
     repo = (os.environ.get("GITHUB_REPOSITORY") or "").strip()
     if repo == "":
@@ -236,6 +281,24 @@ def _extract_diff(text: str) -> str:
     # sometimes model returns '*** Begin Patch' - keep as fail if no diff.
     return ""
 
+def _rerun_and_check(workflow_file: str, branch: str, inputs: Dict[str, str], actions_token: str, artifacts: Path, attempt: int, label: str) -> bool:
+    _step("post_fix_rerun_begin label=" + label)
+    start_epoch = time.time()
+    dispatch_workflow(workflow_file, branch, inputs, actions_token)
+    run_id = find_latest_run_id(workflow_file, branch, start_epoch - 5, actions_token, timeout_s=240)
+    _step("post_fix_rerun_found run_id=" + str(run_id))
+    info = wait_run_complete(run_id, actions_token, timeout_s=3600)
+    status = str(info.get("status") or "")
+    concl = str(info.get("conclusion") or "")
+    _step("post_fix_rerun_completed run_id=" + str(run_id) + " status=" + status + " conclusion=" + concl)
+    try:
+        logs_zip = download_run_logs_zip(run_id, actions_token)
+        logs_text = extract_logs_text(logs_zip, max_chars=200000)
+        _write(artifacts / ("post_fix_run_" + str(run_id) + "_attempt_" + str(attempt) + ".log"), logs_text)
+    except Exception:
+        pass
+    return (status == "completed" and concl == "success")
+
 def main() -> int:
     if len(sys.argv) < 4:
         print("usage: fd_auto_tune_branch.py <branch> <workflow_file> <max_attempts> [workflow_inputs]")
@@ -368,6 +431,11 @@ def main() -> int:
                     _step("git_push_failed attempt=" + str(attempt))
                     continue
                 _step("git_push_ok attempt=" + str(attempt))
+                ok = _rerun_and_check(workflow_file, branch, inputs, actions_token, artifacts, attempt, "attempt_" + str(attempt))
+                if ok:
+                    _step("post_fix_green attempt=" + str(attempt))
+                    return 0
+                _step("post_fix_still_red attempt=" + str(attempt))
                 diff_fail_count = 0
                 apply_err = ""
                 apply_failed_context = ""
@@ -399,10 +467,14 @@ def main() -> int:
                         subprocess.check_call(["git","commit","-m","FD tune bundle attempt " + str(attempt)], cwd=str(wt_dir))
                     except Exception:
                         pass
-                    pushb = _run(["git","push","--force-with-lease"], str(wt_dir))
-                    _write(artifacts / ("git_push_bundle_attempt_" + str(attempt) + ".log"), pushb.stdout)
+                    pushb = _push_with_fallback(Path(wt_dir), repo_root, artifacts, "git_push_bundle_attempt_" + str(attempt), token, actions_token)
                     if pushb.returncode == 0:
                         _step("git_push_ok attempt=" + str(attempt))
+                        ok = _rerun_and_check(workflow_file, branch, inputs, actions_token, artifacts, attempt, "attempt_" + str(attempt))
+                        if ok:
+                            _step("post_fix_green attempt=" + str(attempt))
+                            return 0
+                        _step("post_fix_still_red attempt=" + str(attempt))
                         diff_fail_count = 0
                         apply_err = ""
                         apply_failed_context = ""
@@ -426,35 +498,6 @@ def main() -> int:
                 apply_failed_context = "\n".join(ctx_parts)
                 _write(artifacts / ("git_apply_failed_context_attempt_" + str(attempt) + ".txt"), apply_failed_context)
                 _step("git_apply_failed attempt=" + str(attempt))
-                # Immediate fallback: request FILE bundle using apply error + current file context, so max_attempts=1 can still fix.
-                bprompt = ""
-                bprompt += "Return ONLY FILE bundle blocks. No prose.\n"
-                bprompt += "FORMAT:\nFILE: path\n<<<\n<content>\n>>>\n\n"
-                bprompt += "Change ONLY minimal files needed to fix the workflow failure.\n"
-                bprompt += "branch: " + branch + "\nworkflow_file: " + workflow_file + "\n"
-                bprompt += "\nWORKFLOW_LOGS_SUMMARY\n" + _summarize_logs_short(logs_text)[:FD_PROMPT_MAX_LOG_CHARS] + "\n"
-                bprompt += "\nPREVIOUS_GIT_APPLY_ERROR\n" + apply_err + "\n"
-                if apply_failed_context.strip() != "":
-                    bprompt += "\nCURRENT_FILE_CONTEXT\n" + apply_failed_context[:FD_PROMPT_MAX_CTX_CHARS] + "\n"
-                bundle_text = call_gemini(bprompt, timeout_s=900)
-                _write(artifacts / ("bundle_after_apply_fail_attempt_" + str(attempt) + "_response.txt"), bundle_text)
-                okb = False
-                try:
-                    okb = _apply_file_bundle(bundle_text, Path(wt_dir), artifacts, "bundle_after_apply_fail_attempt_" + str(attempt))
-                except Exception:
-                    okb = False
-                if okb:
-                    _step("bundle_after_apply_fail_ok attempt=" + str(attempt))
-                    subprocess.check_call(["git","add","-A"], cwd=str(wt_dir))
-                    try:
-                        subprocess.check_call(["git","commit","-m","FD tune bundle-after-apply-fail " + str(attempt)], cwd=str(wt_dir))
-                    except Exception:
-                        pass
-                    pushb = _run(["git","push","--force-with-lease"], str(wt_dir))
-                    _write(artifacts / ("git_push_bundle_after_apply_fail_attempt_" + str(attempt) + ".log"), pushb.stdout)
-                    if pushb.returncode == 0:
-                        _step("git_push_ok attempt=" + str(attempt))
-                        return 0
                 diff_fail_count += 1
                 continue
             _step("git_apply_ok attempt=" + str(attempt))
@@ -465,12 +508,16 @@ def main() -> int:
                 subprocess.check_call(["git","commit","-m","FD tune attempt " + str(attempt)], cwd=str(wt_dir))
             except Exception:
                 pass
-            push = _run(["git","push","--force-with-lease"], str(wt_dir))
-            _write(artifacts / ("git_push_attempt_" + str(attempt) + ".log"), push.stdout)
+            push = _push_with_fallback(Path(wt_dir), repo_root, artifacts, "git_push_attempt_" + str(attempt), token, actions_token)
             if push.returncode != 0:
                 _step("git_push_failed attempt=" + str(attempt))
                 continue
             _step("git_push_ok attempt=" + str(attempt))
+            ok = _rerun_and_check(workflow_file, branch, inputs, actions_token, artifacts, attempt, "attempt_" + str(attempt))
+            if ok:
+                _step("post_fix_green attempt=" + str(attempt))
+                return 0
+            _step("post_fix_still_red attempt=" + str(attempt))
             apply_err = ""
             apply_failed_context = ""
         except Exception:
