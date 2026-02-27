@@ -97,6 +97,33 @@ def _call_gemini_diff(prompt: str, artifacts: Path, label: str) -> str:
     _step("gemini_call_end label=" + label + " resp_chars=" + str(len(resp)))
     return resp
 
+def _extract_failed_paths(git_apply_log: str) -> List[str]:
+    paths: List[str] = []
+    for line in (git_apply_log or "").splitlines():
+        if "patch failed:" in line:
+            # error: patch failed: path:line
+            try:
+                part = line.split("patch failed:",1)[1].strip()
+                p = part.split(":",1)[0].strip()
+                if p and p not in paths:
+                    paths.append(p)
+            except Exception:
+                pass
+        if line.startswith("Checking patch "):
+            p = line.replace("Checking patch ","").strip().strip(".")
+            if p and p not in paths:
+                paths.append(p)
+    return paths[:5]
+
+def _read_repo_file(repo_dir: Path, rel_path: str, max_chars: int = 8000) -> str:
+    p = repo_dir / rel_path
+    if not p.exists():
+        return ""
+    txt = p.read_text(encoding="utf-8", errors="ignore")
+    if len(txt) > max_chars:
+        return txt[:max_chars] + "\n"
+    return txt
+
 def _extract_diff(text: str) -> str:
     t = (text or "").replace("\r\n","\n").replace("\r","\n")
     idx = t.find("diff --git")
@@ -139,6 +166,8 @@ def main() -> int:
 
     inputs = _parse_inputs(workflow_inputs)
     apply_err = ""
+    apply_failed_context = ""
+    apply_failed_context = ""
 
     for attempt in range(1, max_attempts + 1):
         _step("attempt_begin " + str(attempt) + "/" + str(max_attempts))
@@ -201,6 +230,8 @@ def main() -> int:
             prompt += logs_text[:300000] + "\n"
             if apply_err.strip() != "":
                 prompt += "\nPREVIOUS_GIT_APPLY_ERROR\n" + apply_err + "\n"
+            if apply_failed_context.strip() != "":
+                prompt += "\nCURRENT_FILE_CONTEXT\n" + apply_failed_context[:120000] + "\n"
             prompt += "\nRUN_ARTIFACTS\n"
             prompt += str([str(x.get("name") or "") for x in arts]) + "\n"
 
@@ -217,10 +248,16 @@ def main() -> int:
             _write(diff_path, diff)
 
             # Apply diff in worktree
-            app = _run(["git","apply","--whitespace=nowarn","--reject", str(diff_path)], str(wt_dir))
+            app = _run(["git","apply","--3way","--whitespace=nowarn","--reject", str(diff_path)], str(wt_dir))
             _write(artifacts / ("git_apply_attempt_" + str(attempt) + ".log"), app.stdout)
             if app.returncode != 0:
                 apply_err = app.stdout[:4000]
+                paths = _extract_failed_paths(app.stdout)
+                ctx_parts = []
+                for p in paths:
+                    ctx_parts.append("FILE_CURRENT_BEGIN " + p + "\n" + _read_repo_file(Path(wt_dir), p) + "FILE_CURRENT_END " + p + "\n")
+                apply_failed_context = "\n".join(ctx_parts)
+                _write(artifacts / ("git_apply_failed_context_attempt_" + str(attempt) + ".txt"), apply_failed_context)
                 _step("git_apply_failed attempt=" + str(attempt))
                 continue
             _step("git_apply_ok attempt=" + str(attempt))
@@ -237,6 +274,7 @@ def main() -> int:
                 continue
             _step("git_push_ok attempt=" + str(attempt))
             apply_err = ""
+            apply_failed_context = ""
         except Exception:
             _write(artifacts / ("unexpected_exception_attempt_" + str(attempt) + ".txt"), traceback.format_exc() + "\n")
             _step("attempt_exception attempt=" + str(attempt))
