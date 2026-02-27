@@ -7,8 +7,12 @@ import sys
 import tempfile
 import time
 import traceback
+import re
 from pathlib import Path
 from typing import Dict, List
+
+FD_PROMPT_MAX_LOG_CHARS = int(os.environ.get('FD_PROMPT_MAX_LOG_CHARS','40000') or '40000')
+FD_PROMPT_MAX_CTX_CHARS = int(os.environ.get('FD_PROMPT_MAX_CTX_CHARS','60000') or '60000')
 
 sys.path.insert(0, os.path.abspath(os.getcwd()))
 
@@ -151,6 +155,28 @@ def _apply_file_bundle(bundle_text: str, repo_dir: Path, artifacts: Path, label:
     _write(artifacts / (label + "_bundle_applied.txt"), "files_written=" + str(wrote) + "\n")
     return wrote > 0
 
+def _summarize_logs_short(logs_text: str) -> str:
+    if not logs_text:
+        return ""
+    lines = logs_text.splitlines()
+    pats = ["Traceback", "ERROR", "Error:", "FAILED", "FD_FAIL", "Exception"]
+    hits = []
+    for i, line in enumerate(lines):
+        if any(p in line for p in pats):
+            start = max(0, i - 2)
+            end = min(len(lines), i + 6)
+            hits.append("\n".join(lines[start:end]))
+        if len(hits) >= 20:
+            break
+    head = "\n".join(lines[:80])
+    tail = "\n".join(lines[-120:]) if len(lines) > 120 else "\n".join(lines)
+    out = []
+    out.append("HEAD\n" + head)
+    out.append("TAIL\n" + tail)
+    if hits:
+        out.append("HITS\n" + "\n\n".join(hits))
+    return "\n\n".join(out) + "\n"
+
 def _extract_failed_paths(git_apply_log: str) -> List[str]:
     paths: List[str] = []
     for line in (git_apply_log or "").splitlines():
@@ -178,13 +204,34 @@ def _read_repo_file(repo_dir: Path, rel_path: str, max_chars: int = 8000) -> str
         return txt[:max_chars] + "\n"
     return txt
 
+def _normalize_diff(d: str) -> str:
+    t = (d or "").replace("\r\n","\n").replace("\r","\n")
+    if "diff --git" not in t:
+        return t
+    lines = t.split("\n")
+    if not lines:
+        return t
+    # Ensure we have ---/+++ headers for git apply.
+    # If the first diff block is missing them and jumps straight to @@, inject.
+    m = re.match(r"^diff --git a/(.+) b/(.+)\s*$", lines[0].strip())
+    if m:
+        a_path = "a/" + m.group(1).strip()
+        b_path = "b/" + m.group(2).strip()
+        has_oldnew = any(l.startswith("--- ") for l in lines[:10]) and any(l.startswith("+++ ") for l in lines[:10])
+        if not has_oldnew:
+            # find insertion point after diff --git line
+            ins = [lines[0], "--- " + a_path, "+++ " + b_path]
+            rest = lines[1:]
+            lines = ins + rest
+    out = "\n".join(lines).strip() + "\n"
+    return out
+
 def _extract_diff(text: str) -> str:
     t = (text or "").replace("\r\n","\n").replace("\r","\n")
     idx = t.find("diff --git")
     if idx >= 0:
         d = t[idx:]
-        if not d.endswith("\n"):
-            d = d + "\n"
+        d = _normalize_diff(d)
         return d
     # sometimes model returns '*** Begin Patch' - keep as fail if no diff.
     return ""
@@ -282,12 +329,13 @@ def main() -> int:
                 prompt += "run_url: " + html_url + "\n"
             prompt += "status: " + status + "\n"
             prompt += "conclusion: " + conclusion + "\n"
-            prompt += "\nWORKFLOW_LOGS\n"
-            prompt += logs_text[:300000] + "\n"
+            prompt += "\nWORKFLOW_LOGS_SUMMARY\n"
+            summary = _summarize_logs_short(logs_text)
+            prompt += summary[:FD_PROMPT_MAX_LOG_CHARS] + "\n"
             if apply_err.strip() != "":
                 prompt += "\nPREVIOUS_GIT_APPLY_ERROR\n" + apply_err + "\n"
             if apply_failed_context.strip() != "":
-                prompt += "\nCURRENT_FILE_CONTEXT\n" + apply_failed_context[:120000] + "\n"
+                prompt += "\nCURRENT_FILE_CONTEXT\n" + apply_failed_context[:FD_PROMPT_MAX_CTX_CHARS] + "\n"
             prompt += "\nRUN_ARTIFACTS\n"
             prompt += str([str(x.get("name") or "") for x in arts]) + "\n"
 
@@ -297,11 +345,11 @@ def main() -> int:
                 bprompt += "FORMAT:\nFILE: path\n<<<\n<content>\n>>>\n\n"
                 bprompt += "Change ONLY minimal files needed.\n"
                 bprompt += "branch: " + branch + "\nworkflow_file: " + workflow_file + "\n"
-                bprompt += "\nWORKFLOW_LOGS\n" + logs_text[:200000] + "\n"
+                bprompt += "\nWORKFLOW_LOGS_SUMMARY\n" + _summarize_logs_short(logs_text)[:FD_PROMPT_MAX_LOG_CHARS] + "\n"
                 if apply_err.strip() != "":
                     bprompt += "\nPREVIOUS_GIT_APPLY_ERROR\n" + apply_err + "\n"
                 if apply_failed_context.strip() != "":
-                    bprompt += "\nCURRENT_FILE_CONTEXT\n" + apply_failed_context[:120000] + "\n"
+                    bprompt += "\nCURRENT_FILE_CONTEXT\n" + apply_failed_context[:FD_PROMPT_MAX_CTX_CHARS] + "\n"
                 bundle_text = _call_gemini_bundle(bprompt, artifacts, "bundle_attempt_" + str(attempt))
                 okb = _apply_file_bundle(bundle_text, Path(wt_dir), artifacts, "bundle_attempt_" + str(attempt))
                 if not okb:
@@ -337,11 +385,11 @@ def main() -> int:
                 bprompt += "FORMAT:\nFILE: path\n<<<\n<content>\n>>>\n\n"
                 bprompt += "Change ONLY minimal files needed.\n"
                 bprompt += "branch: " + branch + "\nworkflow_file: " + workflow_file + "\n"
-                bprompt += "\nWORKFLOW_LOGS\n" + logs_text[:200000] + "\n"
+                bprompt += "\nWORKFLOW_LOGS_SUMMARY\n" + _summarize_logs_short(logs_text)[:FD_PROMPT_MAX_LOG_CHARS] + "\n"
                 if apply_err.strip() != "":
                     bprompt += "\nPREVIOUS_GIT_APPLY_ERROR\n" + apply_err + "\n"
                 if apply_failed_context.strip() != "":
-                    bprompt += "\nCURRENT_FILE_CONTEXT\n" + apply_failed_context[:120000] + "\n"
+                    bprompt += "\nCURRENT_FILE_CONTEXT\n" + apply_failed_context[:FD_PROMPT_MAX_CTX_CHARS] + "\n"
                 bundle_text = _call_gemini_bundle(bprompt, artifacts, "bundle_after_diff_missing_" + str(attempt))
                 okb = _apply_file_bundle(bundle_text, Path(wt_dir), artifacts, "bundle_after_diff_missing_" + str(attempt))
                 if okb:
@@ -397,9 +445,14 @@ def main() -> int:
             apply_err = ""
             apply_failed_context = ""
         except Exception:
-            _write(artifacts / ("unexpected_exception_attempt_" + str(attempt) + ".txt"), traceback.format_exc() + "\n")
+            msg = traceback.format_exc()
+            if "FD_GEMINI_QUOTA_EXCEEDED" in msg:
+                _write(artifacts / "FD_GEMINI_BLOCKED.txt", msg + "\n")
+                _step("gemini_quota_exceeded")
+                return 3
+            _write(artifacts / ("unexpected_exception_attempt_" + str(attempt) + ".txt"), msg + "\n")
             _step("attempt_exception attempt=" + str(attempt))
-            print(traceback.format_exc())
+            print(msg)
             continue
 
     _step("tuning_attempts_exhausted")

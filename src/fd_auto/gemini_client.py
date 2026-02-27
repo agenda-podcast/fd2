@@ -58,6 +58,8 @@ def call_gemini(prompt: str, timeout_s: int = 900) -> str:
                 b = e.read().decode("utf-8", errors="replace")
             except Exception:
                 pass
+            if e.code == 429:
+                raise RuntimeError("FD_GEMINI_QUOTA_EXCEEDED: http=429 body=" + b[:1200])
             raise RuntimeError("FD_FAIL: gemini http=" + str(e.code) + " body=" + b[:800])
         except Exception:
             if attempt < retries:

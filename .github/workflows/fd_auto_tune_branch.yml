@@ -46,6 +46,8 @@ jobs:
           FD_GEMINI_RESPONSE_MIME: "text/plain"
           FD_SNAPSHOT_MAX_CHARS: "180000"
           FD_SNAPSHOT_CHUNK_CHARS: "50000"
+          FD_PROMPT_MAX_LOG_CHARS: "40000"
+          FD_PROMPT_MAX_CTX_CHARS: "60000"
         run: |
           git config user.name "fd-auto-bot"
           git config user.email "fd-auto-bot@users.noreply.github.com"
