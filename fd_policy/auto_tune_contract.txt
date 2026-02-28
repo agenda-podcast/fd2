@@ -1,0 +1,23 @@
+FD AUTO-TUNE BUILDER CONTRACT (AUTHORITATIVE)
+
+GOAL
+- Make the target GitHub Actions workflow run succeed on the target branch.
+- Use the smallest change required by evidence from the real run.
+
+HARD FORMAT REQUIREMENT
+- Output ONLY a standard unified diff suitable for: git apply
+- The response must start with: diff --git a/FILE b/FILE
+- No markdown fences. No explanations. No JSON. No extra text.
+
+EVIDENCE-DRIVEN RULES
+- Base changes only on the evidence provided (logs, error messages, failing step names, dispatch error body).
+- Do not guess. If evidence is insufficient, change only instrumentation/logging to reveal the missing evidence.
+
+STABILITY RULES
+- Do not rename functions, files, workflows, secrets, vars, or env keys unless evidence explicitly requires it.
+- Do not remove workflow_dispatch from workflows used by automation.
+- Avoid unrelated refactors or cleanup.
+
+SCOPE RULES
+- Change only files listed in ALLOWED_FILES provided by Auto-Tune.
+- If a needed file is not in ALLOWED_FILES, the correct action is to adjust only the minimal evidence-producing code so Auto-Tune can include that file next run.

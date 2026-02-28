@@ -8,8 +8,9 @@ import tempfile
 import time
 import traceback
 import re
+import hashlib
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Set, Tuple, Optional
 
 FD_PROMPT_MAX_LOG_CHARS = int(os.environ.get('FD_PROMPT_MAX_LOG_CHARS','40000') or '40000')
 FD_PROMPT_MAX_CTX_CHARS = int(os.environ.get('FD_PROMPT_MAX_CTX_CHARS','60000') or '60000')
@@ -31,7 +32,7 @@ def _preview(s: str, n: int = 600) -> str:
     t = (s or "").replace("\r\n","\n").replace("\r","\n")
     t = t.replace("\n", " ")
     if len(t) > n:
-        return t[:n] + "..."
+        return t[:n] + " [TRUNC]"
     return t
 
 def _step(msg: str) -> None:
@@ -40,6 +41,119 @@ def _step(msg: str) -> None:
 def _write(p: Path, s: str) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(s, encoding="utf-8", errors="ignore")
+
+def _read_text_if_exists(p: Path, max_chars: int = 120000) -> str:
+    if not p.exists():
+        return ""
+    txt = p.read_text(encoding="utf-8", errors="ignore")
+    if len(txt) > max_chars:
+        return txt[:max_chars] + "\n"
+    return txt
+
+
+def _sha256_text(s: str) -> str:
+    h = hashlib.sha256()
+    h.update((s or "").encode("utf-8", errors="ignore"))
+    return h.hexdigest()
+
+
+def _diff_touched_files(diff_text: str) -> List[str]:
+    files: List[str] = []
+    for line in (diff_text or "").splitlines():
+        if line.startswith("diff --git "):
+            m = re.match(r"^diff --git a/(.+) b/(.+)\\s*$", line.strip())
+            if m:
+                f = m.group(2).strip()
+                if f not in files:
+                    files.append(f)
+    return files
+
+
+def _collect_paths_from_evidence(text: str, max_items: int = 50) -> List[str]:
+    if not text:
+        return []
+    pats = [
+        r"(\\.github/workflows/[A-Za-z0-9_./\\-]+\\.ya?ml)",
+        r"(src/[A-Za-z0-9_./\\-]+\\.py)",
+        r"(tools/[A-Za-z0-9_./\\-]+\\.py)",
+        r"(fd_policy/[A-Za-z0-9_./\\-]+\\.txt)",
+        r"(docs/[A-Za-z0-9_./\\-]+)",
+    ]
+    out: List[str] = []
+    for pat in pats:
+        for m in re.finditer(pat, text):
+            pth = m.group(1)
+            if pth and pth not in out:
+                out.append(pth)
+            if len(out) >= max_items:
+                return out
+    return out
+
+
+def _compute_allowed_files(workflow_file: str, evidence_text: str, extra_paths: Optional[List[str]] = None) -> List[str]:
+    allowed: List[str] = []
+    wf = ".github/workflows/" + workflow_file.strip()
+    if workflow_file.strip() != "" and wf not in allowed:
+        allowed.append(wf)
+    for pth in _collect_paths_from_evidence(evidence_text):
+        if pth not in allowed:
+            allowed.append(pth)
+    if extra_paths:
+        for pth in extra_paths:
+            pth2 = (pth or "").strip()
+            if pth2 != "" and pth2 not in allowed:
+                allowed.append(pth2)
+    return allowed[:80]
+
+
+def _validate_unified_diff_only(resp_text: str) -> Tuple[bool, str]:
+    tx = (resp_text or "").replace("\\r\\n", "\\n").replace("\\r", "\\n")
+    if not tx.startswith("diff --git "):
+        return False, "format_violation: response must start with 'diff --git'"
+    if "--- a/" not in tx or "+++ b/" not in tx:
+        return False, "format_violation: missing ---/+++ headers"
+    if "@@" not in tx and "new file mode" not in tx and "deleted file mode" not in tx:
+        return False, "format_violation: missing hunks (no @@) or file mode markers"
+    return True, ""
+
+
+def _validate_scope(diff_text: str, allowed_files: List[str]) -> Tuple[bool, str]:
+    touched = _diff_touched_files(diff_text)
+    allowed_set = set(allowed_files or [])
+    bad = [f for f in touched if f not in allowed_set]
+    if bad:
+        return False, "scope_violation: diff touches files not in ALLOWED_FILES: " + ",".join(bad[:15])
+    return True, ""
+
+
+def _detect_secret_var_flips(diff_text: str) -> List[Tuple[str, str, str]]:
+    flips: List[Tuple[str, str, str]] = []
+    cur_file = ""
+    last_removed = ""
+    for line in (diff_text or "").splitlines():
+        if line.startswith("diff --git "):
+            m = re.match(r"^diff --git a/(.+) b/(.+)\\s*$", line.strip())
+            if m:
+                cur_file = m.group(2).strip()
+            last_removed = ""
+            continue
+        if line.startswith("-"):
+            last_removed = line
+            continue
+        if line.startswith("+") and last_removed:
+            rm = last_removed
+            add = line
+            m1 = re.search(r"\\$\\{\\{\\s*secrets\\.([A-Za-z0-9_]+)\\s*\\}\\}", rm)
+            m2 = re.search(r"\\$\\{\\{\\s*vars\\.([A-Za-z0-9_]+)\\s*\\}\\}", add)
+            if m1 and m2 and m1.group(1) == m2.group(1):
+                flips.append(("secrets_to_vars", m1.group(1), cur_file))
+            m3 = re.search(r"\\$\\{\\{\\s*vars\\.([A-Za-z0-9_]+)\\s*\\}\\}", rm)
+            m4 = re.search(r"\\$\\{\\{\\s*secrets\\.([A-Za-z0-9_]+)\\s*\\}\\}", add)
+            if m3 and m4 and m3.group(1) == m4.group(1):
+                flips.append(("vars_to_secrets", m3.group(1), cur_file))
+            last_removed = ""
+    return flips
+
 
 def _run(cmd: List[str], cwd: str) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
@@ -222,6 +336,130 @@ def _summarize_logs_short(logs_text: str) -> str:
         out.append("HITS\n" + "\n\n".join(hits))
     return "\n\n".join(out) + "\n"
 
+def _read_workflow_yaml(repo_dir: Path, workflow_file: str, max_chars: int = 60000) -> str:
+    p = repo_dir / ".github" / "workflows" / workflow_file
+    if not p.exists():
+        return ""
+    txt = p.read_text(encoding="utf-8", errors="ignore")
+    if len(txt) > max_chars:
+        return txt[:max_chars] + "\n"
+    return txt
+
+def _extract_workflow_vars(yaml_text: str) -> Dict[str, List[str]]:
+    # Lightweight extraction of referenced secrets/vars/env and inputs usage.
+    out: Dict[str, List[str]] = {"secrets": [], "vars": [], "env": [], "inputs": []}
+    if not yaml_text:
+        return out
+
+    def _add(k: str, v: str) -> None:
+        if v and v not in out[k]:
+            out[k].append(v)
+
+    # secrets.NAME and vars.NAME references
+    for m in re.finditer(r"\$\{\{\s*secrets\.([A-Za-z0-9_]+)\s*\}\}", yaml_text):
+        _add("secrets", m.group(1))
+    for m in re.finditer(r"\$\{\{\s*vars\.([A-Za-z0-9_]+)\s*\}\}", yaml_text):
+        _add("vars", m.group(1))
+    for m in re.finditer(r"\$\{\{\s*env\.([A-Za-z0-9_]+)\s*\}\}", yaml_text):
+        _add("env", m.group(1))
+    for m in re.finditer(r"\$\{\{\s*inputs\.([A-Za-z0-9_]+)\s*\}\}", yaml_text):
+        _add("inputs", m.group(1))
+
+    out["secrets"].sort()
+    out["vars"].sort()
+    out["env"].sort()
+    out["inputs"].sort()
+    return out
+
+def _extract_workflow_dispatch_inputs(yaml_text: str, max_lines: int = 200) -> str:
+    # Best-effort summary of workflow_dispatch inputs: name, required, default.
+    if not yaml_text:
+        return ""
+    lines = yaml_text.splitlines()
+    in_wd = False
+    in_inputs = False
+    current = ""
+    required = ""
+    default = ""
+    out_lines: List[str] = []
+
+    def _commit() -> None:
+        nonlocal current, required, default
+        if current:
+            out_lines.append("- " + current + " required=" + (required or "") + " default=" + (default or ""))
+        current = ""
+        required = ""
+        default = ""
+
+    for raw in lines:
+        s = raw.rstrip("\n")
+        t = s.strip()
+
+        if t.startswith("on:"):
+            in_wd = False
+            in_inputs = False
+            _commit()
+
+        if t == "workflow_dispatch:" or t.endswith(" workflow_dispatch:"):
+            in_wd = True
+            in_inputs = False
+            _commit()
+            continue
+
+        if in_wd and t == "inputs:":
+            in_inputs = True
+            _commit()
+            continue
+
+        if not in_inputs:
+            continue
+
+        # inputs key
+        if t.endswith(":") and not t.startswith(("required:", "default:", "description:", "type:", "options:")):
+            _commit()
+            current = t[:-1].strip()
+            continue
+
+        if t.startswith("required:"):
+            required = t.split(":", 1)[1].strip()
+            continue
+
+        if t.startswith("default:"):
+            default = t.split(":", 1)[1].strip().strip('"').strip("'")
+            continue
+
+        if len(out_lines) >= max_lines:
+            break
+
+    _commit()
+    return "\n".join(out_lines).strip() + ("\n" if out_lines else "")
+
+def _extract_failures(logs_text: str, max_items: int = 12) -> str:
+    if not logs_text:
+        return ""
+    lines = logs_text.splitlines()
+    pats = [
+        "FD_FAIL",
+        "FD_POLICY_FAIL",
+        "Traceback",
+        "ERROR",
+        "Error:",
+        "##[error]",
+        "Process completed with exit code",
+        "Unhandled exception",
+    ]
+    out: List[str] = []
+    for i, line in enumerate(lines):
+        if any(p in line for p in pats):
+            start = max(0, i - 2)
+            end = min(len(lines), i + 6)
+            blk = "\n".join(lines[start:end]).strip()
+            if blk and blk not in out:
+                out.append(blk)
+        if len(out) >= max_items:
+            break
+    return "\n\n".join(["-\n" + x for x in out]).strip() + ("\n" if out else "")
+
 def _extract_failed_paths(git_apply_log: str) -> List[str]:
     paths: List[str] = []
     for line in (git_apply_log or "").splitlines():
@@ -330,8 +568,6 @@ def main() -> int:
 
     inputs = _parse_inputs(workflow_inputs)
     apply_err = ""
-    diff_fail_count = 0
-    apply_failed_context = ""
     apply_failed_context = ""
 
     for attempt in range(1, max_attempts + 1):
@@ -340,34 +576,50 @@ def main() -> int:
             # Dispatch target workflow
             start_epoch = time.time()
             _step("dispatch_workflow file=" + workflow_file + " ref=" + branch + " inputs=" + str(inputs))
-            dispatch_workflow(workflow_file, branch, inputs, actions_token)
+            run_id = 0
+            status = ""
+            conclusion = ""
+            html_url = ""
+            logs_text = ""
+            arts = []
 
-            run_id = find_latest_run_id(workflow_file, branch, start_epoch - 5, actions_token, timeout_s=180)
-            _step("workflow_run_found run_id=" + str(run_id))
-            run_info = wait_run_complete(run_id, actions_token, timeout_s=3600)
-            status = str(run_info.get("status") or "")
-            conclusion = str(run_info.get("conclusion") or "")
-            html_url = str(run_info.get("html_url") or "")
-            _step("workflow_run_completed run_id=" + str(run_id) + " status=" + status + " conclusion=" + conclusion)
+            dispatch_failed = False
+            dispatch_err = ""
+            try:
+                dispatch_workflow(workflow_file, branch, inputs, actions_token)
+            except Exception:
+                dispatch_failed = True
+                dispatch_err = traceback.format_exc()
+                logs_text = dispatch_err
+                _write(artifacts / ("dispatch_failed_attempt_" + str(attempt) + ".log"), dispatch_err)
 
-            logs_zip = download_run_logs_zip(run_id, actions_token)
-            logs_text = extract_logs_text(logs_zip, max_chars=350000)
-            _write(artifacts / ("run_" + str(run_id) + "_attempt_" + str(attempt) + ".log"), logs_text)
+            if not dispatch_failed:
+                run_id = find_latest_run_id(workflow_file, branch, start_epoch - 5, actions_token, timeout_s=180)
+                _step("workflow_run_found run_id=" + str(run_id))
+                run_info = wait_run_complete(run_id, actions_token, timeout_s=3600)
+                status = str(run_info.get("status") or "")
+                conclusion = str(run_info.get("conclusion") or "")
+                html_url = str(run_info.get("html_url") or "")
+                _step("workflow_run_completed run_id=" + str(run_id) + " status=" + status + " conclusion=" + conclusion)
 
-            # Download run artifacts
-            arts = list_run_artifacts(run_id, actions_token)
-            _write(artifacts / ("run_" + str(run_id) + "_artifacts.json"), str(arts) + "\n")
-            for a in arts:
-                aid = int(a.get("id") or 0)
-                name = str(a.get("name") or "artifact")
-                if aid <= 0:
-                    continue
-                _step("download_artifact name=" + name + " id=" + str(aid))
-                blob = download_artifact_zip(aid, actions_token)
-                outp = artifacts / ("run_" + str(run_id) + "_artifact_" + name + ".zip")
-                outp.write_bytes(blob)
+                logs_zip = download_run_logs_zip(run_id, actions_token)
+                logs_text = extract_logs_text(logs_zip, max_chars=350000)
+                _write(artifacts / ("run_" + str(run_id) + "_attempt_" + str(attempt) + ".log"), logs_text)
 
-            if status == "completed" and conclusion == "success":
+                # Download run artifacts
+                arts = list_run_artifacts(run_id, actions_token)
+                _write(artifacts / ("run_" + str(run_id) + "_artifacts.json"), str(arts) + "\n")
+                for a in arts:
+                    aid = int(a.get("id") or 0)
+                    name = str(a.get("name") or "artifact")
+                    if aid <= 0:
+                        continue
+                    _step("download_artifact name=" + name + " id=" + str(aid))
+                    blob = download_artifact_zip(aid, actions_token)
+                    outp = artifacts / ("run_" + str(run_id) + "_artifact_" + name + ".zip")
+                    outp.write_bytes(blob)
+
+            if (not dispatch_failed) and status == "completed" and conclusion == "success":
                 _step("green run_id=" + str(run_id))
                 return 0
 
@@ -375,116 +627,123 @@ def main() -> int:
             snapshot_text = _read_latest_snapshot(wt_dir)
             _upload_snapshot_chunks(snapshot_text, artifacts / ("snapshot_upload_attempt_" + str(attempt)))
 
-            prompt = ""
-            prompt += "You are fixing a GitHub repo so that a workflow passes.\n"
-            prompt += "Return ONLY a unified diff that `git apply` can apply. Start with: diff --git\n"
-            prompt += "FIRST LINE MUST BE: diff --git a/FILE b/FILE\n"
-            prompt += "REQUIREMENTS:\n"
-            prompt += "- Use minimal hunks (like --unified=0). Avoid including blank context lines.\n"
-            prompt += "- Hunk headers (@@ -a,b +c,d @@) must match the number of following +/-/space lines.\n"
-            prompt += "- Do not include prose or markdown fences.\n"
+            wf_yaml = _read_workflow_yaml(Path(wt_dir), workflow_file)
+            used = _extract_workflow_vars(wf_yaml)
+            inputs_summary = _extract_workflow_dispatch_inputs(wf_yaml)
 
-            prompt += "Do not include markdown fences. Do not include explanations.\n"
+            contract_path = Path(wt_dir) / "fd_policy" / "auto_tune_contract.txt"
+            contract_txt = _read_text_if_exists(contract_path)
+            contract_hash = _sha256_text(contract_txt)[:12] if contract_txt.strip() != "" else ""
+
+            evidence_all = "\n".join([dispatch_err or "", logs_text or "", wf_yaml or "", apply_err or "", apply_failed_context or ""])
+            allowed_files = _compute_allowed_files(workflow_file, evidence_all, extra_paths=_extract_failed_paths(apply_err))
+            prompt = ""
+            prompt += "You are the Builder fixing an automated GitHub Actions workflow failure.\n"
+            prompt += "\nGOAL\n"
+            prompt += "Make the target workflow run succeed on the target branch with the smallest possible code change.\n"
+            prompt += "\nHARD RULES\n"
+            prompt += "- Output ONLY a standard unified diff (git apply compatible). No markdown. No explanations.\n"
+            prompt += "- FIRST LINE MUST BE: diff --git a/FILE b/FILE\n"
+            prompt += "- Make minimal changes required by evidence. No refactors, renames, or cleanup unless required by logs.\n"
+            prompt += "- Do not change workflow triggers or secrets/vars/env names unless evidence explicitly requires it.\n"
+            prompt += "- If this workflow is used by automation, keep it dispatchable: must include on: workflow_dispatch.\n"
+            prompt += "- Base everything on EVIDENCE below.\n"
+            if contract_txt.strip() != "":
+                prompt += "\nPROJECT_CONTRACT version=" + contract_hash + "\n" + contract_txt + "\n"
+            prompt += "\nALLOWED_FILES\n" + "\n".join(["- " + x for x in allowed_files]) + "\n"
             prompt += "\nTARGET\n"
             prompt += "branch: " + branch + "\n"
             prompt += "workflow_file: " + workflow_file + "\n"
+            if run_id:
+                prompt += "run_id: " + str(run_id) + "\n"
             if html_url:
                 prompt += "run_url: " + html_url + "\n"
-            prompt += "status: " + status + "\n"
-            prompt += "conclusion: " + conclusion + "\n"
-            prompt += "\nWORKFLOW_LOGS_SUMMARY\n"
+            if dispatch_failed:
+                prompt += "dispatch: failed\n"
+            else:
+                prompt += "status: " + status + "\n"
+                prompt += "conclusion: " + conclusion + "\n"
+
+            if dispatch_failed:
+                prompt += "\nEVIDENCE: DISPATCH_ERROR\n" + dispatch_err[:FD_PROMPT_MAX_LOG_CHARS] + "\n"
+
+            prompt += "\nEVIDENCE: WORKFLOW_YAML_EXCERPT\n"
+            prompt += wf_yaml[:FD_PROMPT_MAX_CTX_CHARS] + "\n"
+
+            prompt += "\nEVIDENCE: VARIABLES_USED\n"
+            prompt += "secrets: " + ",".join(used.get("secrets") or []) + "\n"
+            prompt += "vars: " + ",".join(used.get("vars") or []) + "\n"
+            prompt += "env: " + ",".join(used.get("env") or []) + "\n"
+            prompt += "inputs_refs: " + ",".join(used.get("inputs") or []) + "\n"
+            if inputs_summary.strip() != "":
+                prompt += "workflow_dispatch_inputs:\n" + inputs_summary
+
+            prompt += "\nEVIDENCE: FAILURES\n"
+            fails = _extract_failures(logs_text)
+            if fails.strip() == "":
+                fails = "(no obvious failure markers found)\n"
+            prompt += fails[:FD_PROMPT_MAX_LOG_CHARS] + "\n"
+
+            prompt += "\nEVIDENCE: WORKFLOW_LOGS_SUMMARY\n"
             summary = _summarize_logs_short(logs_text)
             prompt += summary[:FD_PROMPT_MAX_LOG_CHARS] + "\n"
+
             if apply_err.strip() != "":
-                prompt += "\nPREVIOUS_GIT_APPLY_ERROR\n" + apply_err + "\n"
+                prompt += "\nEVIDENCE: PREVIOUS_GIT_APPLY_ERROR\n" + apply_err + "\n"
             if apply_failed_context.strip() != "":
-                prompt += "\nCURRENT_FILE_CONTEXT\n" + apply_failed_context[:FD_PROMPT_MAX_CTX_CHARS] + "\n"
-            prompt += "\nRUN_ARTIFACTS\n"
+                prompt += "\nEVIDENCE: CURRENT_FILE_CONTEXT\n" + apply_failed_context[:FD_PROMPT_MAX_CTX_CHARS] + "\n"
+
+            prompt += "\nEVIDENCE: RUN_ARTIFACTS\n"
             prompt += str([str(x.get("name") or "") for x in arts]) + "\n"
 
-            if diff_fail_count >= 2:
-                bprompt = ""
-                bprompt += "Return ONLY FILE bundle blocks. No prose.\n"
-                bprompt += "FORMAT:\nFILE: path\n<<<\n<content>\n>>>\n\n"
-                bprompt += "Change ONLY minimal files needed.\n"
-                bprompt += "branch: " + branch + "\nworkflow_file: " + workflow_file + "\n"
-                bprompt += "\nWORKFLOW_LOGS_SUMMARY\n" + _summarize_logs_short(logs_text)[:FD_PROMPT_MAX_LOG_CHARS] + "\n"
-                if apply_err.strip() != "":
-                    bprompt += "\nPREVIOUS_GIT_APPLY_ERROR\n" + apply_err + "\n"
-                if apply_failed_context.strip() != "":
-                    bprompt += "\nCURRENT_FILE_CONTEXT\n" + apply_failed_context[:FD_PROMPT_MAX_CTX_CHARS] + "\n"
-                bundle_text = _call_gemini_bundle(bprompt, artifacts, "bundle_attempt_" + str(attempt))
-                okb = _apply_file_bundle(bundle_text, Path(wt_dir), artifacts, "bundle_attempt_" + str(attempt))
-                if not okb:
-                    _step("bundle_apply_failed attempt=" + str(attempt))
-                    diff_fail_count += 1
-                    continue
-                _step("bundle_apply_ok attempt=" + str(attempt))
-                subprocess.check_call(["git","add","-A"], cwd=str(wt_dir))
-                try:
-                    subprocess.check_call(["git","commit","-m","FD tune bundle attempt " + str(attempt)], cwd=str(wt_dir))
-                except Exception:
-                    pass
-                pushb = _run(["git","push","--force-with-lease"], str(wt_dir))
-                _write(artifacts / ("git_push_bundle_attempt_" + str(attempt) + ".log"), pushb.stdout)
-                if pushb.returncode != 0:
-                    _step("git_push_failed attempt=" + str(attempt))
-                    continue
-                _step("git_push_ok attempt=" + str(attempt))
-                ok = _rerun_and_check(workflow_file, branch, inputs, actions_token, artifacts, attempt, "attempt_" + str(attempt))
-                if ok:
-                    _step("post_fix_green attempt=" + str(attempt))
-                    return 0
-                _step("post_fix_still_red attempt=" + str(attempt))
-                diff_fail_count = 0
-                apply_err = ""
-                apply_failed_context = ""
+            diff_text = _call_gemini_diff(prompt, artifacts, "fix_attempt_" + str(attempt))
+            ok_fmt, reason_fmt = _validate_unified_diff_only(diff_text)
+            if not ok_fmt:
+                _write(artifacts / ("fix_format_violation_attempt_" + str(attempt) + ".txt"), reason_fmt + "\n" + diff_text[:8000] + "\n")
+                _step("format_violation attempt=" + str(attempt) + " reason=" + reason_fmt)
+                apply_err = "FD_FAIL: " + reason_fmt
                 continue
 
-            diff_text = _call_gemini_diff(prompt, artifacts, "fix_attempt_" + str(attempt))
             diff = _extract_diff(diff_text)
             if diff.strip() == "":
                 _write(artifacts / ("fix_diff_missing_attempt_" + str(attempt) + ".txt"), diff_text[:8000] + "\n")
                 _step("diff_missing attempt=" + str(attempt))
-                diff_fail_count += 1
-                # Fallback: request FILE bundle immediately when diff is missing.
-                bprompt = ""
-                bprompt += "Return ONLY FILE bundle blocks. No prose.\n"
-                bprompt += "FORMAT:\nFILE: path\n<<<\n<content>\n>>>\n\n"
-                bprompt += "Change ONLY minimal files needed.\n"
-                bprompt += "branch: " + branch + "\nworkflow_file: " + workflow_file + "\n"
-                bprompt += "\nWORKFLOW_LOGS_SUMMARY\n" + _summarize_logs_short(logs_text)[:FD_PROMPT_MAX_LOG_CHARS] + "\n"
-                if apply_err.strip() != "":
-                    bprompt += "\nPREVIOUS_GIT_APPLY_ERROR\n" + apply_err + "\n"
-                if apply_failed_context.strip() != "":
-                    bprompt += "\nCURRENT_FILE_CONTEXT\n" + apply_failed_context[:FD_PROMPT_MAX_CTX_CHARS] + "\n"
-                bundle_text = _call_gemini_bundle(bprompt, artifacts, "bundle_after_diff_missing_" + str(attempt))
-                okb = _apply_file_bundle(bundle_text, Path(wt_dir), artifacts, "bundle_after_diff_missing_" + str(attempt))
-                if okb:
-                    _step("bundle_apply_ok attempt=" + str(attempt))
-                    subprocess.check_call(["git","add","-A"], cwd=str(wt_dir))
-                    try:
-                        subprocess.check_call(["git","commit","-m","FD tune bundle attempt " + str(attempt)], cwd=str(wt_dir))
-                    except Exception:
-                        pass
-                    pushb = _push_with_fallback(Path(wt_dir), repo_root, artifacts, "git_push_bundle_attempt_" + str(attempt), token, actions_token)
-                    if pushb.returncode == 0:
-                        _step("git_push_ok attempt=" + str(attempt))
-                        ok = _rerun_and_check(workflow_file, branch, inputs, actions_token, artifacts, attempt, "attempt_" + str(attempt))
-                        if ok:
-                            _step("post_fix_green attempt=" + str(attempt))
-                            return 0
-                        _step("post_fix_still_red attempt=" + str(attempt))
-                        diff_fail_count = 0
-                        apply_err = ""
-                        apply_failed_context = ""
-                        continue
+                apply_err = "FD_FAIL: gemini did not return unified diff"
                 continue
+
+            ok_scope, reason_scope = _validate_scope(diff, allowed_files)
+            if not ok_scope:
+                _write(artifacts / ("fix_scope_violation_attempt_" + str(attempt) + ".txt"), reason_scope + "\n" + diff[:8000] + "\n")
+                _step("scope_violation attempt=" + str(attempt) + " reason=" + reason_scope)
+                apply_err = "FD_FAIL: " + reason_scope
+                continue
+
+            flips = _detect_secret_var_flips(diff)
+            if flips:
+                ev = (fails or "") + "\n" + (dispatch_err or "") + "\n" + (summary or "")
+                blocked = []
+                for direction, key, fpath in flips:
+                    if key not in ev:
+                        blocked.append(direction + ":" + key + "@" + fpath)
+                if blocked:
+                    msg = "stability_violation: secrets/vars flip not justified by evidence: " + ",".join(blocked)
+                    _write(artifacts / ("fix_stability_violation_attempt_" + str(attempt) + ".txt"), msg + "\n" + diff[:8000] + "\n")
+                    _step("stability_violation attempt=" + str(attempt))
+                    apply_err = "FD_FAIL: " + msg
+                    continue
 
             diff_path = artifacts / ("fix_attempt_" + str(attempt) + ".diff")
             if not diff.endswith("\n"):
                 diff = diff + "\n"
             _write(diff_path, diff)
+
+            # Pre-check diff application (deterministic)
+            chk = _run(["git","apply","--check","--whitespace=nowarn", str(diff_path)], str(wt_dir))
+            _write(artifacts / ("git_apply_check_attempt_" + str(attempt) + ".log"), chk.stdout)
+            if chk.returncode != 0:
+                apply_err = chk.stdout[:4000]
+                _step("git_apply_check_failed attempt=" + str(attempt))
+                continue
 
             # Apply diff in worktree
             app = _run(["git","apply","--3way","--whitespace=nowarn", str(diff_path)], str(wt_dir))
@@ -498,10 +757,8 @@ def main() -> int:
                 apply_failed_context = "\n".join(ctx_parts)
                 _write(artifacts / ("git_apply_failed_context_attempt_" + str(attempt) + ".txt"), apply_failed_context)
                 _step("git_apply_failed attempt=" + str(attempt))
-                diff_fail_count += 1
                 continue
             _step("git_apply_ok attempt=" + str(attempt))
-            diff_fail_count = 0
 
             subprocess.check_call(["git","add","-A"], cwd=str(wt_dir))
             try:

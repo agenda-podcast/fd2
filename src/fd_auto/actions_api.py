@@ -12,6 +12,15 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 from typing import Any, Dict, List
 
+def _read_http_error_body(e: urllib.error.HTTPError) -> str:
+    try:
+        b = e.read()
+        if not b:
+            return ""
+        return b.decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+
 def _repo() -> str:
     r = (os.environ.get("GITHUB_REPOSITORY") or "").strip()
     if r == "":
@@ -27,23 +36,29 @@ def _headers(token: str) -> Dict[str, str]:
 
 def _get_json(url: str, token: str) -> Any:
     req = urllib.request.Request(url, headers=_headers(token), method="GET")
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        body = _read_http_error_body(e)
+        raise RuntimeError("FD_GH_HTTP_ERROR method=GET url=" + url + " status=" + str(e.code) + " body=" + body) from e
 
 def _post_json(url: str, token: str, payload: Dict[str, Any]) -> None:
     body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(url, headers=_headers(token), data=body, method="POST")
     req.add_header("content-type", "application/json; charset=utf-8")
-    with urllib.request.urlopen(req, timeout=60):
-        pass
+    try:
+        with urllib.request.urlopen(req, timeout=60):
+            pass
+    except urllib.error.HTTPError as e:
+        eb = _read_http_error_body(e)
+        raise RuntimeError("FD_GH_HTTP_ERROR method=POST url=" + url + " status=" + str(e.code) + " body=" + eb) from e
 
 def dispatch_workflow(workflow_file: str, ref: str, inputs: Dict[str, str], token: str) -> None:
     repo = _repo()
     wf = workflow_file.strip()
     url = f"https://api.github.com/repos/{repo}/actions/workflows/{wf}/dispatches"
-    payload: Dict[str, Any] = {"ref": ref}
-    if inputs:
-        payload["inputs"] = inputs
+    payload: Dict[str, Any] = {"ref": ref, "inputs": inputs or {}}
     _post_json(url, token, payload)
 
 def find_latest_run_id(workflow_file: str, branch: str, not_before_epoch: float, token: str, timeout_s: int = 180) -> int:
@@ -88,8 +103,12 @@ def download_run_logs_zip(run_id: int, token: str) -> bytes:
     repo = _repo()
     url = f"https://api.github.com/repos/{repo}/actions/runs/{run_id}/logs"
     req = urllib.request.Request(url, headers=_headers(token), method="GET")
-    with urllib.request.urlopen(req, timeout=120) as resp:
-        return resp.read()
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            return resp.read()
+    except urllib.error.HTTPError as e:
+        body = _read_http_error_body(e)
+        raise RuntimeError("FD_GH_HTTP_ERROR method=GET url=" + url + " status=" + str(e.code) + " body=" + body) from e
 
 def extract_logs_text(logs_zip: bytes, max_chars: int = 400000) -> str:
     buf = io.BytesIO(logs_zip)
