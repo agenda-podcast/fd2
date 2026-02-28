@@ -78,13 +78,24 @@ def main() -> int:
                 break
             except Exception as exc:
                 last_err = str(exc)
-                print("FD_WARN: plan_parse_failed attempt=" + str(attempt) + " err=" + last_err)
+                err_msg = "FD_WARN: plan_parse_failed attempt=" + str(attempt) + " err=" + last_err
+                print(err_msg)
+                _write(artifacts / ("plan_parse_error_attempt_" + str(attempt) + ".txt"), err_msg + "
+
+OUTPUT_PREVIEW
+" + (plan_out[:2000] if plan_out else "") + "
+")
                 continue
         if patch is None:
-            _write(artifacts / "plan_parse_error.txt", last_err + "\n")
-            print("FD_FAIL: plan_parse_failed err=" + last_err)
+            fail_msg = "FD_FAIL: plan_parse_failed err=" + last_err
+            print(fail_msg)
+            _write(artifacts / "plan_parse_error.txt", fail_msg + "
+
+LAST_OUTPUT_PREVIEW
+" + (plan_out[:4000] if plan_out else "") + "
+")
             try:
-                create_comment(issue_number, "FD_FAIL: plan parse failed\nERROR=" + last_err, token)
+                create_comment(issue_number, fail_msg, token)
             except Exception:
                 pass
             return 1
