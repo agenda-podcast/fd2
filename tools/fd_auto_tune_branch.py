@@ -9,6 +9,7 @@ import time
 import traceback
 import re
 import hashlib
+import shutil
 from pathlib import Path
 from typing import Dict, List, Set, Tuple, Optional
 
@@ -169,6 +170,33 @@ def _parse_inputs(s: str) -> Dict[str, str]:
         k, v = t.split("=", 1)
         out[k.strip()] = v.strip()
     return out
+
+def _cleanup_pycache(repo_dir: Path, artifacts: Path, label: str) -> None:
+    removed_files = 0
+    removed_dirs = 0
+    for root, dirs, files in os.walk(str(repo_dir)):
+        dn = [d for d in list(dirs) if d == "__pycache__"]
+        for d in dn:
+            p = Path(root) / d
+            try:
+                shutil.rmtree(str(p))
+                removed_dirs += 1
+            except Exception:
+                pass
+            try:
+                dirs.remove(d)
+            except Exception:
+                pass
+        for f in files:
+            if not f.endswith(".pyc"):
+                continue
+            p2 = Path(root) / f
+            try:
+                p2.unlink()
+                removed_files += 1
+            except Exception:
+                pass
+    _write(artifacts / (label + "_pycache_cleanup.log"), "removed_dirs=" + str(removed_dirs) + " removed_files=" + str(removed_files) + "\n")
 
 def _prepare_git_auth(repo_dir: Path, token: str, artifacts: Path, label: str) -> None:
     # Log current auth-related settings and force PAT-based auth (avoid actions/checkout extraheader taking precedence).
@@ -759,6 +787,7 @@ def main() -> int:
                 _step("git_apply_failed attempt=" + str(attempt))
                 continue
             _step("git_apply_ok attempt=" + str(attempt))
+            _cleanup_pycache(Path(wt_dir), artifacts, "attempt_" + str(attempt))
 
             subprocess.check_call(["git","add","-A"], cwd=str(wt_dir))
             try:

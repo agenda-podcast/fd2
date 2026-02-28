@@ -58,7 +58,9 @@ def dispatch_workflow(workflow_file: str, ref: str, inputs: Dict[str, str], toke
     repo = _repo()
     wf = workflow_file.strip()
     url = f"https://api.github.com/repos/{repo}/actions/workflows/{wf}/dispatches"
-    payload: Dict[str, Any] = {"ref": ref, "inputs": inputs or {}}
+    payload: Dict[str, Any] = {"ref": ref}
+    if inputs:
+        payload["inputs"] = inputs
     _post_json(url, token, payload)
 
 def find_latest_run_id(workflow_file: str, branch: str, not_before_epoch: float, token: str, timeout_s: int = 180) -> int:
