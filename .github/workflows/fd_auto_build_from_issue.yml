@@ -39,7 +39,7 @@ jobs:
             git config user.email "fd-auto-bot@users.noreply.github.com"
             git add -A
             git commit -m "FD auto build artifacts"
-            git push origin Tune
+            git push origin HEAD:Tune
           fi
 
       - name: Upload artifacts
