@@ -1,12 +1,41 @@
 ROLE: PM
 
-Output FD_PATCH_V1 only.
-Write ONLY these files:
-- handoff/app_building_plan.md
-- handoff/work_items/WI-001-code.md
-- handoff/work_items/WI-002-docs.md
-- handoff/work_items/WI-003-tests.md
-- handoff/work_items/WI-004-publish.md
+You must output ONLY a valid FD_PATCH_V1 patch. No markdown fences. No prose outside FILE blocks.
 
-Do NOT write any files outside handoff/.
+FORMAT
+FD_PATCH_V1
+work_item_id: WI-PLAN
+producer_role: PM
 
+FILE: handoff/app_building_plan.md
+<<<
+<markdown content>
+>>>
+
+FILE: handoff/work_items/WI-001-code.md
+<<<
+<markdown content>
+>>>
+
+FILE: handoff/work_items/WI-002-docs.md
+<<<
+<markdown content>
+>>>
+
+FILE: handoff/work_items/WI-003-tests.md
+<<<
+<markdown content>
+>>>
+
+FILE: handoff/work_items/WI-004-publish.md
+<<<
+<markdown content>
+>>>
+
+END
+
+RULES
+- Write ONLY the 5 files listed above under handoff/.
+- Do NOT add or delete any other files.
+- Ensure every FILE has both <<< and >>>.
+- Do NOT include extra sections like "##" outside FILE blocks.

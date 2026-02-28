@@ -78,9 +78,15 @@ def main() -> int:
                 break
             except Exception as exc:
                 last_err = str(exc)
+                print("FD_WARN: plan_parse_failed attempt=" + str(attempt) + " err=" + last_err)
                 continue
         if patch is None:
-            create_comment(issue_number, "FD_FAIL: plan parse failed\nERROR=" + last_err, token)
+            _write(artifacts / "plan_parse_error.txt", last_err + "\n")
+            print("FD_FAIL: plan_parse_failed err=" + last_err)
+            try:
+                create_comment(issue_number, "FD_FAIL: plan parse failed\nERROR=" + last_err, token)
+            except Exception:
+                pass
             return 1
 
         # Apply plan into repo (handoff)
