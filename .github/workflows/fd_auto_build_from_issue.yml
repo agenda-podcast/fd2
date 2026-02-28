@@ -32,6 +32,7 @@ jobs:
           FD_GEMINI_RESPONSE_MIME: "text/plain"
           FD_SNAPSHOT_MAX_FILE_BYTES: "600000"
         run: |
+          set -x
           python3 tools/fd_auto_build_from_issue.py "${{ github.event.inputs.issue_number }}"
           if [ -n "$(git status --porcelain)" ]; then
             git config user.name "fd-auto-bot"
