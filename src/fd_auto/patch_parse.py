@@ -1,5 +1,6 @@
 from typing import List, Tuple
 from dataclasses import dataclass
+import re
 
 @dataclass
 class FileEntry:
@@ -16,6 +17,89 @@ class Patch:
 
 def _fail(msg: str) -> None:
     raise ValueError("FD_PARSE_FAIL: " + msg)
+
+
+def _try_parse_relaxed_markdown(t: str) -> Patch:
+    # Accept FD_PATCH_V1 that contains markdown sections instead of FILE blocks.
+    # Defaults:
+    # - work_item_id: WI-000 if absent
+    # - producer_role: PM if absent
+    lines = (t or "").replace("\r\n","\n").replace("\r","\n").split("\n")
+
+    meta = {}
+    for i in range(1, min(len(lines), 60)):
+        line = lines[i].strip()
+        if not line:
+            continue
+        if line.startswith(("FILE:", "DELETE:", "END")):
+            break
+        if ":" in line and not line.startswith(("#", "-", "*", "```")):
+            k, v = line.split(":", 1)
+            k = k.strip()
+            v = v.strip()
+            if k and v and k not in meta:
+                meta[k] = v
+
+    wi = (meta.get("work_item_id") or "WI-000").strip()
+    prod = (meta.get("producer_role") or "PM").strip()
+
+    files: List[FileEntry] = []
+
+    # Strategy A: frontmatter blocks
+    i = 0
+    while i < len(lines):
+        if lines[i].strip() == "---":
+            j = i + 1
+            path = ""
+            while j < len(lines) and lines[j].strip() != "---":
+                m = re.match(r"^path:\s*(\S+)\s*$", lines[j].strip())
+                if m:
+                    path = m.group(1).strip()
+                j += 1
+            if path and j < len(lines) and lines[j].strip() == "---":
+                k = j + 1
+                buf = []
+                while k < len(lines):
+                    if lines[k].strip() == "---" and k + 1 < len(lines) and re.match(r"^path:\s*\S+\s*$", lines[k+1].strip()):
+                        break
+                    buf.append(lines[k])
+                    k += 1
+                if path.startswith("handoff/"):
+                    files.append(FileEntry(path=path, content="\n".join(buf).rstrip("\n") + "\n"))
+                i = k
+                continue
+        i += 1
+
+    if files:
+        return Patch(kind="patch", work_item_id=wi, producer_role=prod, files=files, delete=[])
+
+    # Strategy B: heading sections
+    heading_re = re.compile(r"^(#{1,3})\s+([A-Za-z0-9_./-]+)\s*$")
+    current_path = None
+    buf: List[str] = []
+
+    def commit() -> None:
+        nonlocal current_path, buf, files
+        if current_path and current_path.startswith("handoff/"):
+            files.append(FileEntry(path=current_path, content="\n".join(buf).rstrip("\n") + "\n"))
+        current_path = None
+        buf = []
+
+    for raw in lines:
+        m = heading_re.match(raw.strip())
+        if m:
+            path = m.group(2).strip()
+            if path.startswith("handoff/") and path.endswith(".md"):
+                commit()
+                current_path = path
+                continue
+        buf.append(raw)
+
+    commit()
+
+    if not files:
+        _fail("no FILE blocks (relaxed markdown parse found no sections)")
+    return Patch(kind="patch", work_item_id=wi, producer_role=prod, files=files, delete=[])
 
 def parse_fd_patch_v1(text: str) -> Patch:
     t = (text or "").replace("\r\n","\n").replace("\r","\n").strip()
@@ -87,12 +171,8 @@ def parse_fd_patch_v1(text: str) -> Patch:
 
     wi = meta.get("work_item_id","").strip()
     prod = meta.get("producer_role","").strip()
-    if wi == "":
-        _fail("missing work_item_id")
-    if prod == "":
-        _fail("missing producer_role")
-    if not files:
-        _fail("no FILE blocks")
+    if wi == "" or prod == "" or not files:
+        return _try_parse_relaxed_markdown(t)
     return Patch(kind="patch", work_item_id=wi, producer_role=prod, files=files, delete=delete)
 
 def bundle_total_parts(raw: str) -> Tuple[int, int]:

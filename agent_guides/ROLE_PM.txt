@@ -1,43 +1,26 @@
 ROLE: PM
 
-You MUST output ONLY one artifact: FD_PATCH_V1 (no markdown outside FILE blocks).
-
-FORMAT (EXACT)
+Output must start with:
 FD_PATCH_V1
-work_item_id: WI-000-plan
-producer_role: PM
-FILE: handoff/app_building_plan.md
-<<<
-...file content...
->>>
-FILE: handoff/work_items/WI-001-code.md
-<<<
-...file content...
->>>
-FILE: handoff/work_items/WI-002-docs.md
-<<<
-...file content...
->>>
-FILE: handoff/work_items/WI-003-tests.md
-<<<
-...file content...
->>>
-FILE: handoff/work_items/WI-004-publish.md
-<<<
-...file content...
->>>
-END
 
-RULES
-- Output must start with FD_PATCH_V1 on the first line.
-- Include meta lines: work_item_id and producer_role exactly once each.
-- Only write FILE blocks for these exact paths under handoff/:
-  - handoff/app_building_plan.md
-  - handoff/work_items/WI-001-code.md
-  - handoff/work_items/WI-002-docs.md
-  - handoff/work_items/WI-003-tests.md
-  - handoff/work_items/WI-004-publish.md
+Then write the content for EACH file using this exact section format:
+
+## handoff/app_building_plan.md
+<full markdown content for this file>
+
+## handoff/work_items/WI-001-code.md
+<full markdown content for this file>
+
+## handoff/work_items/WI-002-docs.md
+<full markdown content for this file>
+
+## handoff/work_items/WI-003-tests.md
+<full markdown content for this file>
+
+## handoff/work_items/WI-004-publish.md
+<full markdown content for this file>
+
+Rules:
 - Do NOT write any files outside handoff/.
-- Do NOT include any bullets, headings, or prose outside FILE blocks.
-- Every FILE block MUST include a line with <<< and later a line with >>>.
-- End with END on its own line.
+- Do NOT use FILE: blocks. Use only the '## <path>' headings above.
+- No extra commentary outside the file sections.

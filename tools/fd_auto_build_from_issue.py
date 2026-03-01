@@ -70,7 +70,7 @@ def main() -> int:
         plan_out = ""
         patch = None
         last_err = ""
-        for attempt in range(1,4):
+        for attempt in range(1, 4):
             plan_out = call_gemini(plan_prompt, timeout_s=900)
             _write(artifacts / ("plan_output_attempt_" + str(attempt) + ".txt"), plan_out)
             try:
@@ -78,21 +78,26 @@ def main() -> int:
                 break
             except Exception as exc:
                 last_err = str(exc)
-                err_msg = "FD_WARN: plan_parse_failed attempt=" + str(attempt) + " err=" + last_err
-                print(err_msg)
-                _write(artifacts / ("plan_parse_error_attempt_" + str(attempt) + ".txt"), err_msg + "
+                msg = "FD_WARN: plan_parse_failed attempt=" + str(attempt) + " err=" + last_err
+                print(msg)
+                preview = (plan_out or "").replace("
+", "
+").replace("", "
+")
+                if len(preview) > 1200:
+                    preview = preview[:1200] + "
+[TRUNC]
+"
+                _write(artifacts / ("plan_parse_error_attempt_" + str(attempt) + ".txt"), msg + "
 
 OUTPUT_PREVIEW
-" + (plan_out[:2000] if plan_out else "") + "
+" + preview + "
 ")
                 continue
         if patch is None:
             fail_msg = "FD_FAIL: plan_parse_failed err=" + last_err
             print(fail_msg)
             _write(artifacts / "plan_parse_error.txt", fail_msg + "
-
-LAST_OUTPUT_PREVIEW
-" + (plan_out[:4000] if plan_out else "") + "
 ")
             try:
                 create_comment(issue_number, fail_msg, token)
