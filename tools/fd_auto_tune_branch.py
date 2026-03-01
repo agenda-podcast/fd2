@@ -15,6 +15,9 @@ from typing import Dict, List, Set, Tuple, Optional
 
 FD_PROMPT_MAX_LOG_CHARS = int(os.environ.get('FD_PROMPT_MAX_LOG_CHARS','40000') or '40000')
 FD_PROMPT_MAX_CTX_CHARS = int(os.environ.get('FD_PROMPT_MAX_CTX_CHARS','60000') or '60000')
+FD_PROMPT_MAX_RELATED_FILES = int(os.environ.get('FD_PROMPT_MAX_RELATED_FILES','12') or '12')
+FD_PROMPT_MAX_FILE_CHARS = int(os.environ.get('FD_PROMPT_MAX_FILE_CHARS','12000') or '12000')
+FD_PROMPT_MAX_RELATED_TOTAL_CHARS = int(os.environ.get('FD_PROMPT_MAX_RELATED_TOTAL_CHARS','80000') or '80000')
 
 sys.path.insert(0, os.path.abspath(os.getcwd()))
 
@@ -70,6 +73,50 @@ def _diff_touched_files(diff_text: str) -> List[str]:
     return files
 
 
+def _diff_new_files(diff_text: str) -> Set[str]:
+    new_files: Set[str] = set()
+    cur_file = ""
+    saw_new_mode = False
+    for line in (diff_text or "").splitlines():
+        if line.startswith("diff --git "):
+            m = re.match(r"^diff --git a/(.+) b/(.+)\\s*$", line.strip())
+            cur_file = m.group(2).strip() if m else ""
+            saw_new_mode = False
+            continue
+        if line.startswith("new file mode"):
+            saw_new_mode = True
+            continue
+        if cur_file and saw_new_mode:
+            new_files.add(cur_file)
+            saw_new_mode = False
+    return new_files
+
+
+def _diff_mentions_requirements_install(diff_text: str) -> bool:
+    for line in (diff_text or "").splitlines():
+        if not line.startswith("+"):
+            continue
+        t = line[1:]
+        if "pip install -r requirements.txt" in t or "pip3 install -r requirements.txt" in t:
+            return True
+    return False
+
+
+def _validate_requirements_install(repo_dir: Path, diff_text: str) -> Tuple[bool, str]:
+    # Accept creation of new files via unified diff.
+    # If a diff adds a pip install -r requirements.txt line, accept it only if requirements.txt exists
+    # or the diff creates requirements.txt as a new file.
+    if not _diff_mentions_requirements_install(diff_text):
+        return True, ""
+    req_path = repo_dir / "requirements.txt"
+    new_files = _diff_new_files(diff_text)
+    if req_path.exists():
+        return True, ""
+    if "requirements.txt" in new_files:
+        return True, ""
+    return False, "stability_violation: diff adds 'pip install -r requirements.txt' but requirements.txt does not exist and is not created in the diff"
+
+
 def _collect_paths_from_evidence(text: str, max_items: int = 50) -> List[str]:
     if not text:
         return []
@@ -107,6 +154,93 @@ def _compute_allowed_files(workflow_file: str, evidence_text: str, extra_paths: 
     return allowed[:80]
 
 
+def _expand_related_files(wt_dir: Path, base_paths: List[str]) -> List[str]:
+    # Expand evidence file paths to include directly-related local files.
+    # Strategy:
+    # - include the file itself if exists
+    # - include __init__.py in the same directory (if exists)
+    # - include up to 5 sibling .py files in same directory (stable sorted)
+    out: List[str] = []
+    seen: Set[str] = set()
+    for rel in base_paths:
+        rel = (rel or "").strip().lstrip("./")
+        if rel == "":
+            continue
+        if rel in seen:
+            continue
+        seen.add(rel)
+        out.append(rel)
+
+        abs_path = wt_dir / rel
+        parent = abs_path.parent
+        if parent.exists() and parent.is_dir():
+            init_rel = str((parent / "__init__.py").relative_to(wt_dir)) if (parent / "__init__.py").exists() else ""
+            if init_rel and init_rel not in seen:
+                seen.add(init_rel)
+                out.append(init_rel)
+
+            sibs: List[str] = []
+            try:
+                for p in sorted(parent.iterdir(), key=lambda x: x.name):
+                    if not p.is_file():
+                        continue
+                    if p.suffix != ".py":
+                        continue
+                    sib_rel = str(p.relative_to(wt_dir))
+                    if sib_rel in seen:
+                        continue
+                    sibs.append(sib_rel)
+            except Exception:
+                sibs = []
+            for sib_rel in sibs[:5]:
+                seen.add(sib_rel)
+                out.append(sib_rel)
+    return out
+
+
+def _read_text_file_limited(path: Path, max_chars: int) -> str:
+    try:
+        s = path.read_text(errors="replace")
+    except Exception:
+        return ""
+    if max_chars > 0 and len(s) > max_chars:
+        return s[:max_chars] + "\n[TRUNC]\n"
+    return s
+
+
+def _read_related_files_context(wt_dir: Path, related: List[str]) -> str:
+    total = 0
+    blocks: List[str] = []
+    for rel in related:
+        if len(blocks) >= FD_PROMPT_MAX_RELATED_FILES:
+            break
+        rel = (rel or "").strip().lstrip("./")
+        if rel == "":
+            continue
+        abs_path = wt_dir / rel
+        if not abs_path.exists() or not abs_path.is_file():
+            continue
+        # skip very large/binary-ish files
+        try:
+            size = abs_path.stat().st_size
+        except Exception:
+            size = 0
+        if size > 500000:
+            continue
+        txt = _read_text_file_limited(abs_path, FD_PROMPT_MAX_FILE_CHARS)
+        if txt.strip() == "":
+            continue
+        block = "FILE: " + rel + "\n" + txt + "\n"
+        if total + len(block) > FD_PROMPT_MAX_RELATED_TOTAL_CHARS:
+            break
+        blocks.append(block)
+        total += len(block)
+    return "\n".join(blocks).strip() + ("\n" if blocks else "")
+
+
+def _read_repo_guide(wt_dir: Path) -> str:
+    p = wt_dir / "fd_context" / "repo_guide.txt"
+    return _read_text_if_exists(p)
 def _validate_unified_diff_only(resp_text: str) -> Tuple[bool, str]:
     tx = (resp_text or "").replace("\\r\\n", "\\n").replace("\\r", "\\n")
     if not tx.startswith("diff --git "):
@@ -120,8 +254,10 @@ def _validate_unified_diff_only(resp_text: str) -> Tuple[bool, str]:
 
 def _validate_scope(diff_text: str, allowed_files: List[str]) -> Tuple[bool, str]:
     touched = _diff_touched_files(diff_text)
+    new_files = _diff_new_files(diff_text)
     allowed_set = set(allowed_files or [])
-    bad = [f for f in touched if f not in allowed_set]
+    # Allow new files (created via unified diff) even if not in ALLOWED_FILES.
+    bad = [f for f in touched if (f not in allowed_set and f not in new_files)]
     if bad:
         return False, "scope_violation: diff touches files not in ALLOWED_FILES: " + ",".join(bad[:15])
     return True, ""
@@ -662,10 +798,14 @@ def main() -> int:
             contract_path = Path(wt_dir) / "fd_policy" / "auto_tune_contract.txt"
             contract_txt = _read_text_if_exists(contract_path)
             contract_hash = _sha256_text(contract_txt)[:12] if contract_txt.strip() != "" else ""
+            repo_guide_txt = _read_repo_guide(Path(wt_dir))
+            repo_guide_hash = _sha256_text(repo_guide_txt)[:12] if repo_guide_txt.strip() != "" else ""
 
             evidence_all = "\n".join([dispatch_err or "", logs_text or "", wf_yaml or "", apply_err or "", apply_failed_context or ""])
-            allowed_files = _compute_allowed_files(workflow_file, evidence_all, extra_paths=_extract_failed_paths(apply_err))
-            prompt = ""
+            failed_paths = sorted(set(_extract_failed_paths(evidence_all) + _extract_failed_paths(apply_err)))
+            allowed_files = _compute_allowed_files(workflow_file, evidence_all, extra_paths=failed_paths)
+            related_files = _expand_related_files(Path(wt_dir), allowed_files + failed_paths)
+            related_ctx = _read_related_files_context(Path(wt_dir), related_files)
             prompt += "You are the Builder fixing an automated GitHub Actions workflow failure.\n"
             prompt += "\nGOAL\n"
             prompt += "Make the target workflow run succeed on the target branch with the smallest possible code change.\n"
@@ -674,10 +814,14 @@ def main() -> int:
             prompt += "- FIRST LINE MUST BE: diff --git a/FILE b/FILE\n"
             prompt += "- Make minimal changes required by evidence. No refactors, renames, or cleanup unless required by logs.\n"
             prompt += "- Do not change workflow triggers or secrets/vars/env names unless evidence explicitly requires it.\n"
+            prompt += "- You MAY create new files if needed, but you must include them in the unified diff (new file mode + full content).\n"
+            prompt += "- Prefer editing existing files over creating new files. Use REPO_GUIDE and RELATED_FILES to find existing code before adding new files.\n"
             prompt += "- If this workflow is used by automation, keep it dispatchable: must include on: workflow_dispatch.\n"
             prompt += "- Base everything on EVIDENCE below.\n"
             if contract_txt.strip() != "":
                 prompt += "\nPROJECT_CONTRACT version=" + contract_hash + "\n" + contract_txt + "\n"
+            if repo_guide_txt.strip() != "":
+                prompt += "\nREPO_GUIDE version=" + repo_guide_hash + "\n" + repo_guide_txt + "\n"
             prompt += "\nALLOWED_FILES\n" + "\n".join(["- " + x for x in allowed_files]) + "\n"
             prompt += "\nTARGET\n"
             prompt += "branch: " + branch + "\n"
@@ -711,6 +855,9 @@ def main() -> int:
             if fails.strip() == "":
                 fails = "(no obvious failure markers found)\n"
             prompt += fails[:FD_PROMPT_MAX_LOG_CHARS] + "\n"
+
+            if related_ctx.strip() != "":
+                prompt += "\nEVIDENCE: RELATED_FILES\n" + related_ctx
 
             prompt += "\nEVIDENCE: WORKFLOW_LOGS_SUMMARY\n"
             summary = _summarize_logs_short(logs_text)
@@ -759,6 +906,13 @@ def main() -> int:
                     _step("stability_violation attempt=" + str(attempt))
                     apply_err = "FD_FAIL: " + msg
                     continue
+
+            ok_req, reason_req = _validate_requirements_install(Path(wt_dir), diff)
+            if not ok_req:
+                _write(artifacts / ("fix_stability_violation_requirements_attempt_" + str(attempt) + ".txt"), reason_req + "\n" + diff[:8000] + "\n")
+                _step("stability_violation attempt=" + str(attempt))
+                apply_err = "FD_FAIL: " + reason_req
+                continue
 
             diff_path = artifacts / ("fix_attempt_" + str(attempt) + ".diff")
             if not diff.endswith("\n"):

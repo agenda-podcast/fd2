@@ -1,0 +1,42 @@
+FD CODE FACTORY - REPO GUIDE (FOR GEMINI)
+
+GOAL
+This repository implements an automated "Auto-Tune" loop that dispatches a GitHub Actions workflow on a target branch,
+waits for the real run result, collects evidence (logs + artifacts), and asks Gemini to return a unified diff to fix
+the concrete failure.
+
+ROLES (EFFECTIVE)
+- PM: defines what to build in a machine-readable output consumed by build scripts.
+- BUILDER (Gemini): returns ONLY a unified diff to fix evidenced failures.
+- AUTO-TUNE: orchestrates dispatch, evidence collection, prompt construction, diff validation, apply, push, and rerun.
+
+TOP LEVEL FOLDERS
+- .github/workflows/
+  GitHub Actions workflows. Auto-Tune dispatches specific workflow files by name.
+- tools/
+  Executable entrypoints (CLI scripts) used by workflows and Auto-Tune.
+  Key scripts:
+  - tools/fd_auto_tune_branch.py : orchestrates Auto-Tune loop (dispatch -> wait -> evidence -> ask Gemini -> apply -> rerun).
+  - tools/fd_auto_build_from_issue.py : builds artifacts for a milestone issue number (PM output -> parse -> produce app files).
+- src/fd_auto/
+  Library code used by tools/.
+  Key modules:
+  - src/fd_auto/actions_api.py : GitHub Actions API calls (dispatch, list runs, download logs/artifacts).
+  - src/fd_auto/gemini_client.py : Gemini HTTP client used by tools to request completions/diffs.
+  - src/fd_auto/patch_parse.py : parses "FD_PATCH_V1" style patch bundles used by build steps.
+  - src/fd_auto/apply_patch.py : applies parsed patch bundles into the working tree.
+- agent_guides/
+  Prompt templates for role behavior (PM / Builder). These are inputs to Gemini prompts.
+- fd_policy/
+  Auto-Tune contract and policy files injected into prompts.
+
+COMMON FAILURE MODES (EVIDENCE-DRIVEN FIXES)
+- Dispatch 422: workflow not dispatchable (missing workflow_dispatch), ref missing, or required inputs missing defaults.
+- Silent python exit code 1: add explicit exception printing + write error artifacts so Auto-Tune has evidence.
+- Missing environment variables (GEMINI_MODEL / GEMINI_ENDPOINT_BASE): set defaults or wire correct vars/secrets in workflow.
+- Patch parse failures: relax parser or adjust PM prompt to match accepted structure.
+
+OUTPUT RULES FOR BUILDER (GEMINI)
+- Return ONLY a unified diff suitable for: git apply
+- Include new files in diff when required (new file mode + full content).
+- Modify only files implicated by evidence and any directly-related files required for the fix.
